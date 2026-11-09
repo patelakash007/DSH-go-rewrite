@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -49,6 +50,8 @@ type SessionRecord struct {
 	Events    []map[string]any
 	Subs      map[string]chan []byte
 	Cancel    context.CancelFunc
+	RunID     string
+	Requests  map[string]struct{}
 	mu        sync.Mutex
 }
 
@@ -60,7 +63,7 @@ type Server struct {
 	clientId    string
 	dbStore     *sqlite.Store
 	credStore   *credentials.Store
-	deepseek    *provider_deepseek.DeepSeek
+	adapter     llm.LLMAdapter
 
 	sessionsMu sync.RWMutex
 	sessions   map[string]*SessionRecord
@@ -108,7 +111,7 @@ func newServer(port int, homeDir string) (*Server, error) {
 		clientId:    clientId,
 		dbStore:     dbStore,
 		credStore:   credStore,
-		deepseek:    dsAdapter,
+		adapter:     dsAdapter,
 		sessions:    make(map[string]*SessionRecord),
 	}
 
@@ -126,6 +129,7 @@ func newServer(port int, homeDir string) (*Server, error) {
 					UpdatedAt: evs[len(evs)-1].Time,
 					Log:       session.NewSessionLog(sID),
 					Subs:      make(map[string]chan []byte),
+					Requests:  make(map[string]struct{}),
 				}
 				for _, ev := range evs {
 					raw, err := ev.MarshalJSON()
@@ -165,6 +169,7 @@ func (s *Server) getOrCreateSession(rawId string, cwd string) *SessionRecord {
 		UpdatedAt: now,
 		Log:       session.NewSessionLog(sID),
 		Subs:      make(map[string]chan []byte),
+		Requests:  make(map[string]struct{}),
 	}
 	s.sessions[rawId] = rec
 	return rec
@@ -177,14 +182,9 @@ func (s *Server) makeCookieName(authority string) string {
 
 func (s *Server) isCookieAuthorized(r *http.Request) bool {
 	expectedVal := "v1." + s.launchToken
-	for _, c := range r.Cookies() {
-		if strings.HasPrefix(c.Name, "dsh-auth-") {
-			if c.Value == expectedVal {
-				return true
-			}
-		}
-	}
-	return false
+	expectedName := s.makeCookieName(r.Host)
+	cookie, err := r.Cookie(expectedName)
+	return err == nil && cookie.Value == expectedVal
 }
 
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
@@ -352,6 +352,11 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 			})
 			rec.mu.Unlock()
 		}
+		sort.Slice(items, func(i, j int) bool {
+			left, _ := items[i]["updatedAt"].(int64)
+			right, _ := items[j]["updatedAt"].(int64)
+			return left > right
+		})
 		return map[string]any{"items": items}, nil
 
 	case "session/create":
@@ -378,7 +383,7 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		s.sessionsMu.RUnlock()
 
 		if !ok {
-			return nil, &RPCError{Code: "NOT_FOUND", Message: "session not found"}
+			return nil, nil
 		}
 
 		rec.mu.Lock()
@@ -446,7 +451,26 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 			}
 		}
 
-		go s.executeTurn(rec, reqId, promptText)
+		if strings.TrimSpace(promptText) == "" {
+			return nil, &RPCError{Code: "gateway/bad-request", Message: "prompt content is empty"}
+		}
+
+		rec.mu.Lock()
+		if _, duplicate := rec.Requests[reqId]; duplicate {
+			rec.mu.Unlock()
+			return map[string]any{"requestId": reqId}, nil
+		}
+		if rec.Cancel != nil {
+			rec.mu.Unlock()
+			return nil, &RPCError{Code: "session/agent-busy", Message: "the session is already running a turn"}
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		rec.Cancel = cancel
+		rec.RunID = reqId
+		rec.Requests[reqId] = struct{}{}
+		rec.mu.Unlock()
+
+		go s.executeTurn(ctx, rec, reqId, promptText)
 		return map[string]any{"requestId": reqId}, nil
 
 	case "session/cancel":
@@ -461,7 +485,6 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 			rec.mu.Lock()
 			if rec.Cancel != nil {
 				rec.Cancel()
-				rec.Cancel = nil
 			}
 			rec.mu.Unlock()
 		}
@@ -650,8 +673,7 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		return map[string]any{"items": items, "hasMore": false}, nil
 
 	default:
-		// Safe fallback for other plugin/settings endpoints
-		return map[string]any{}, nil
+		return nil, &RPCError{Code: "gateway/method-not-found", Message: "native engine does not implement " + endpoint}
 	}
 }
 
@@ -716,10 +738,8 @@ func (s *Server) broadcastAssistantFrame(rec *SessionRecord, frame map[string]an
 	}
 }
 
-func (s *Server) executeTurn(rec *SessionRecord, reqId string, prompt string) {
-	ctx, cancel := context.WithCancel(context.Background())
+func (s *Server) executeTurn(ctx context.Context, rec *SessionRecord, reqId string, prompt string) {
 	rec.mu.Lock()
-	rec.Cancel = cancel
 	turnIdx := 0
 	for _, ev := range rec.Events {
 		if t, _ := ev["type"].(string); t == "turn/start" {
@@ -734,7 +754,10 @@ func (s *Server) executeTurn(rec *SessionRecord, reqId string, prompt string) {
 
 	defer func() {
 		rec.mu.Lock()
-		rec.Cancel = nil
+		if rec.RunID == reqId {
+			rec.Cancel = nil
+			rec.RunID = ""
+		}
 		rec.mu.Unlock()
 	}()
 
@@ -817,29 +840,19 @@ func (s *Server) executeTurn(rec *SessionRecord, reqId string, prompt string) {
 			t, _ := ev["type"].(string)
 			data, _ := ev["data"].(map[string]any)
 			if t == "user/message" {
-				if cl, ok := data["content"].([]any); ok {
-					for _, c := range cl {
-						if cm, ok := c.(map[string]any); ok && cm["type"] == "text" {
-							txt, _ := cm["text"].(string)
-							messages = append(messages, llm.NewUserMessage(txt))
-						}
-					}
+				if text := contentText(data["content"]); text != "" {
+					messages = append(messages, llm.NewUserMessage(text))
 				}
 			} else if t == "assistant/message" {
 				if msg, ok := data["message"].(map[string]any); ok {
-					if cl, ok := msg["content"].([]any); ok {
-						for _, c := range cl {
-							if cm, ok := c.(map[string]any); ok && cm["type"] == "text" {
-								txt, _ := cm["text"].(string)
-								messages = append(messages, llm.NewAssistantText(txt))
-							}
-						}
+					if text := contentText(msg["content"]); text != "" {
+						messages = append(messages, llm.NewAssistantText(text))
 					}
 				}
 			}
 		}
 
-		_, chatErr := s.deepseek.Chat(ctx, llm.ChatRequest{
+		_, chatErr := s.adapter.Chat(ctx, llm.ChatRequest{
 			Model:    modelToUse,
 			Messages: messages,
 		}, func(chunk llm.StreamChunk) {
@@ -951,6 +964,31 @@ func (s *Server) executeTurn(rec *SessionRecord, reqId string, prompt string) {
 	})
 }
 
+// contentText accepts values decoded from JSON ([]any) and values created
+// inside this process ([]map[string]any). Without this normalization, a newly
+// appended prompt disappears from the first model request and only works after
+// the session has been reloaded from SQLite.
+func contentText(value any) string {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return ""
+	}
+	var text strings.Builder
+	for _, part := range parts {
+		if part.Type == "text" {
+			text.WriteString(part.Text)
+		}
+	}
+	return text.String()
+}
+
 func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 	if !s.isCookieAuthorized(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -971,12 +1009,26 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 		return conn.WriteJSON(v)
 	}
 
-	subIDs := make(map[string]*SessionRecord)
+	type subscription struct {
+		rec *SessionRecord
+		key string
+		ch  chan []byte
+	}
+	subscriptions := make(map[string]subscription)
+	removeSubscription := func(streamID string) {
+		sub, ok := subscriptions[streamID]
+		if !ok {
+			return
+		}
+		delete(subscriptions, streamID)
+		sub.rec.mu.Lock()
+		delete(sub.rec.Subs, sub.key)
+		close(sub.ch)
+		sub.rec.mu.Unlock()
+	}
 	defer func() {
-		for id, rec := range subIDs {
-			rec.mu.Lock()
-			delete(rec.Subs, id)
-			rec.mu.Unlock()
+		for streamID := range subscriptions {
+			removeSubscription(streamID)
 		}
 	}()
 
@@ -1000,20 +1052,29 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 			payload, _ := frame["payload"].(map[string]any)
 
 			if endpoint == "$events" {
+				connectionClientID := uuid.MustV4()
 				_ = safeWrite(map[string]any{
 					"type":     "item",
 					"streamId": streamId,
 					"value": map[string]any{
 						"type":     "ready",
-						"clientId": s.clientId,
+						"clientId": connectionClientID,
 						"host": map[string]any{
 							"home": s.homeDir,
 						},
 					},
 				})
 			} else if endpoint == "session/follow" {
+				removeSubscription(streamId)
 				var targetSessionId string
-				if req, ok := payload["request"].(map[string]any); ok {
+				args, _ := payload["args"].(map[string]any)
+				req, _ := args["request"].(map[string]any)
+				// Accept the pre-client test shape too, while the production shape is
+				// payload.args.request (DshMux wraps every logical stream's args).
+				if req == nil {
+					req, _ = payload["request"].(map[string]any)
+				}
+				if req != nil {
 					targetSessionId, _ = req["sessionId"].(string)
 					if targetSessionId == "" {
 						if addr, ok := req["address"].(map[string]any); ok {
@@ -1023,17 +1084,22 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 				}
-				if targetSessionId == "" {
-					if args, ok := payload["args"].(map[string]any); ok {
-						targetSessionId, _ = args["sessionId"].(string)
-						if targetSessionId == "" {
-							if addr, ok := args["address"].(map[string]any); ok {
-								targetSessionId, _ = addr["sessionId"].(string)
-							} else if addrStr, ok := args["address"].(string); ok {
-								targetSessionId = addrStr
-							}
+				if targetSessionId == "" && args != nil {
+					targetSessionId, _ = args["sessionId"].(string)
+					if targetSessionId == "" {
+						if addr, ok := args["address"].(map[string]any); ok {
+							targetSessionId, _ = addr["sessionId"].(string)
+						} else if addrStr, ok := args["address"].(string); ok {
+							targetSessionId = addrStr
 						}
 					}
+				}
+				if targetSessionId == "" {
+					_ = safeWrite(map[string]any{
+						"type": "error", "streamId": streamId,
+						"error": map[string]any{"code": "gateway/arguments-invalid", "message": "sessionId is required"},
+					})
+					continue
 				}
 
 				rec := s.getOrCreateSession(targetSessionId, "")
@@ -1061,7 +1127,7 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 				ch := make(chan []byte, 100)
 				subKey := uuid.MustV4()
 				rec.Subs[subKey] = ch
-				subIDs[subKey] = rec
+				subscriptions[streamId] = subscription{rec: rec, key: subKey, ch: ch}
 				rec.mu.Unlock()
 
 				// Send snapshot
@@ -1120,7 +1186,7 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 			}
 
 		case "cancel", "end":
-			// Handled by connection closure / stream retirement
+			removeSubscription(streamId)
 		}
 	}
 }

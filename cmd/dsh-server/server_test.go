@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,7 +11,22 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/JopenChen/dsh-go/pkg/brand"
+	"github.com/JopenChen/dsh-go/pkg/llm"
 )
+
+type recordingAdapter struct {
+	requests chan llm.ChatRequest
+}
+
+func (a *recordingAdapter) Name() string { return "recording" }
+
+func (a *recordingAdapter) Chat(_ context.Context, req llm.ChatRequest, cb func(llm.StreamChunk)) (llm.Usage, error) {
+	a.requests <- req
+	cb(llm.StreamChunk{Kind: llm.ChunkText, Text: "native reply"})
+	return llm.Usage{PromptTokens: 3, CompletionTokens: 2}, nil
+}
 
 func setupTestServer(t *testing.T) (*Server, *httptest.Server, func()) {
 	t.Helper()
@@ -464,6 +480,96 @@ func TestWebSocketMux(t *testing.T) {
 	}
 	if followVal["sessionId"] != "test-session-123" {
 		t.Errorf("expected sessionId test-session-123 from address, got %v", followVal["sessionId"])
+	}
+
+	// 3. Open session/follow using the actual DshMux envelope. It wraps the
+	// endpoint arguments inside payload.args, with request nested below that.
+	err = ws.WriteJSON(map[string]any{
+		"type":     "open",
+		"streamId": "follow-stream-production",
+		"endpoint": "session/follow",
+		"payload": map[string]any{
+			"args": map[string]any{
+				"request": map[string]any{
+					"address": map[string]any{
+						"kind":      "session",
+						"sessionId": "production-envelope-session",
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("open production session/follow failed: %v", err)
+	}
+	var productionFollow map[string]any
+	if err := ws.ReadJSON(&productionFollow); err != nil {
+		t.Fatalf("read production session/follow snapshot failed: %v", err)
+	}
+	productionValue, _ := productionFollow["value"].(map[string]any)
+	if productionValue["sessionId"] != "production-envelope-session" {
+		t.Fatalf("production DshMux envelope resolved the wrong session: %v", productionValue)
+	}
+}
+
+func TestPromptPassesFreshAndHistoricalMessagesToAdapter(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	adapter := &recordingAdapter{requests: make(chan llm.ChatRequest, 2)}
+	server.adapter = adapter
+	if err := server.credStore.Set(context.Background(), brand.NewCredentialRef("DEEPSEEK_API_KEY"), "test-key"); err != nil {
+		t.Fatalf("set test credential: %v", err)
+	}
+
+	rec := server.getOrCreateSession("adapter-history", "/tmp")
+	prompt := func(requestID, text string) llm.ChatRequest {
+		_, rpcErr := server.dispatchRPC(context.Background(), "session/prompt", map[string]any{
+			"request": map[string]any{
+				"sessionId": "adapter-history",
+				"requestId": requestID,
+				"content":   []any{map[string]any{"type": "text", "text": text}},
+			},
+		})
+		if rpcErr != nil {
+			t.Fatalf("prompt %s rejected: %+v", requestID, rpcErr)
+		}
+		select {
+		case request := <-adapter.requests:
+			return request
+		case <-time.After(3 * time.Second):
+			t.Fatalf("prompt %s did not reach adapter", requestID)
+			return llm.ChatRequest{}
+		}
+	}
+	waitIdle := func() {
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			rec.mu.Lock()
+			idle := rec.Cancel == nil
+			rec.mu.Unlock()
+			if idle {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatal("turn did not become idle")
+	}
+
+	first := prompt("request-1", "first prompt")
+	if len(first.Messages) != 1 || first.Messages[0].Role != llm.RoleUser || first.Messages[0].Content[0].Text != "first prompt" {
+		t.Fatalf("fresh in-memory prompt missing from adapter request: %#v", first.Messages)
+	}
+	waitIdle()
+
+	second := prompt("request-2", "second prompt")
+	if len(second.Messages) != 3 {
+		t.Fatalf("expected user/assistant/user history, got %#v", second.Messages)
+	}
+	if second.Messages[0].Content[0].Text != "first prompt" ||
+		second.Messages[1].Content[0].Text != "native reply" ||
+		second.Messages[2].Content[0].Text != "second prompt" {
+		t.Fatalf("adapter history has wrong content: %#v", second.Messages)
 	}
 }
 

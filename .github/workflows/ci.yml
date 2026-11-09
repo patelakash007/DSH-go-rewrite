@@ -1,0 +1,88 @@
+name: Native Engine CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-engine-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  go:
+    name: Go and Android ARM64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+      - name: Unit and server tests
+        run: go test ./...
+      - name: Race-test the protocol server
+        run: go test -race ./cmd/dsh-server
+      - name: Build Android ARM64 engine
+        run: CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o "$RUNNER_TEMP/libdsh.so" ./cmd/dsh-server
+      - name: Verify Android ELF and 16 KiB page compatibility
+        run: |
+          file "$RUNNER_TEMP/libdsh.so" | grep -q 'ARM aarch64'
+          readelf -lW "$RUNNER_TEMP/libdsh.so" | grep -q '/system/bin/linker64'
+          test "$(readelf -lW "$RUNNER_TEMP/libdsh.so" | awk '$1 == "LOAD" {print $NF}' | sort -u)" = '0x10000'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-engine-android-arm64
+          path: ${{ runner.temp }}/libdsh.so
+          if-no-files-found: error
+
+  dart-contract:
+    name: Dart client contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout DSH-go-rewrite
+        uses: actions/checkout@v4
+        with:
+          path: dsh-go-rewrite
+      - name: Checkout DSH-app client
+        uses: actions/checkout@v4
+        with:
+          repository: patelakash007/DSH-app
+          path: dsh-app
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache-dependency-path: dsh-go-rewrite/go.sum
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.7'
+          channel: stable
+          cache: true
+      - name: Run real Dart-to-Go protocol test
+        shell: bash
+        run: |
+          set -euo pipefail
+          host="$RUNNER_TEMP/dsh-server"
+          home="$RUNNER_TEMP/dsh-native-contract-home"
+          log="$RUNNER_TEMP/dsh-native-contract.log"
+          (cd dsh-go-rewrite && go build -o "$host" ./cmd/dsh-server)
+          mkdir -p "$home"
+          "$host" --port 39080 --home "$home" >"$log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 100); do
+            launch_url=$(sed -nE 's/^dsh web: (http.*)$/\1/p' "$log" | tail -n 1)
+            if [ -n "$launch_url" ]; then break; fi
+            if ! kill -0 "$pid" 2>/dev/null; then cat "$log"; exit 1; fi
+            sleep 0.1
+          done
+          test -n "${launch_url:-}" || { cat "$log"; exit 1; }
+          (cd dsh-app/packages/dsh_client && dart pub get --enforce-lockfile)
+          (cd dsh-app/packages/dsh_client && DSH_NATIVE_GO_LIVE_URL="$launch_url" dart test test/native_go_contract_test.dart --reporter expanded)
