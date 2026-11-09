@@ -779,6 +779,7 @@ func (s *Server) executeTurn(ctx context.Context, rec *SessionRecord, reqId stri
 	})
 
 	// Set title if first turn
+	var generatedTitle string
 	rec.mu.Lock()
 	if rec.Title == "" {
 		t := prompt
@@ -786,9 +787,12 @@ func (s *Server) executeTurn(ctx context.Context, rec *SessionRecord, reqId stri
 			t = string([]rune(t)[:24]) + "..."
 		}
 		rec.Title = t
-		go s.broadcastEvent(rec, "session/title", map[string]any{"title": t})
+		generatedTitle = t
 	}
 	rec.mu.Unlock()
+	if generatedTitle != "" {
+		s.broadcastEvent(rec, "session/title", map[string]any{"title": generatedTitle})
+	}
 
 	// 3. step/start
 	s.broadcastEvent(rec, "step/start", map[string]any{"turn": turnIdx, "step": 1})
@@ -796,6 +800,9 @@ func (s *Server) executeTurn(ctx context.Context, rec *SessionRecord, reqId stri
 	// 4. Stream response
 	attemptId := uuid.MustV4()
 	var revision int64 = 1
+	rec.mu.Lock()
+	startedAfterSeq := len(rec.Events)
+	rec.mu.Unlock()
 
 	s.broadcastAssistantFrame(rec, map[string]any{
 		"type":            "start",
@@ -803,7 +810,7 @@ func (s *Server) executeTurn(ctx context.Context, rec *SessionRecord, reqId stri
 		"revision":        revision,
 		"turn":            turnIdx,
 		"step":            1,
-		"startedAfterSeq": len(rec.Events),
+		"startedAfterSeq": startedAfterSeq,
 	})
 
 	var fullText strings.Builder

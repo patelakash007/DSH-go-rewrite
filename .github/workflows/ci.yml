@@ -84,5 +84,5 @@ jobs:
             sleep 0.1
           done
           test -n "${launch_url:-}" || { cat "$log"; exit 1; }
-          (cd dsh-app/packages/dsh_client && dart pub get --enforce-lockfile)
-          (cd dsh-app/packages/dsh_client && DSH_NATIVE_GO_LIVE_URL="$launch_url" dart test test/native_go_contract_test.dart --reporter expanded)
+          (cd dsh-app/packages/dsh_client && PUB_HOSTED_URL=https://pub.flutter-io.cn dart pub get --enforce-lockfile)
+          (cd dsh-app/packages/dsh_client && PUB_HOSTED_URL=https://pub.flutter-io.cn DSH_NATIVE_GO_LIVE_URL="$launch_url" dart test test/native_go_contract_test.dart --reporter expanded)
