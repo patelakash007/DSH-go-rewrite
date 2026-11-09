@@ -1,0 +1,49 @@
+# If you prefer the allow list template instead of the deny list, see community template:
+# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+#
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Code coverage profiles and other test artifacts
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# env file
+.env
+
+# Editor/IDE
+# .idea/
+# .vscode/
+
+# Task lists / design documentation (docs/) are tracked in version control.
+# Ignore runtime-generated reports and local session traces:
+#   - docs/*.html                   Runtime-generated HTML reports
+#   - docs/trace.md                 Local session trace history
+docs/*.html
+docs/trace.md
+trace.md
+
+# Hugo documentation site (site/) build artifacts and local lock files
+# site/ source (content/hugo.yaml/layouts etc.) is version-controlled
+site/public/
+site/public-local/
+site/.hugo_build.lock
+site/resources/
+site/.hugo/
+site/.cache/

@@ -1,0 +1,42 @@
+{{- /* ==========================================================================
+   --------------------------------------------------------------------------
+   ========================================================================== */ -}}
+
+{{- if hugo.IsMultilingual -}}
+{{- $langList := slice }}
+{{- range site.Languages }}{{ $langList = $langList | append .Lang }}{{ end }}
+{{- $defaultLang := site.Language.Lang }}
+<script>
+  (function () {
+    var langs = [{{ range $langList }}"{{ . }}",{{ end }}];
+    var defaultLang = "{{ $defaultLang }}";
+
+    var saved = null;
+    try { saved = localStorage.getItem("dsh-lang"); } catch (e) {}
+
+    var path = location.pathname;
+
+    var cur = null;
+    var segStart = -1;
+    for (var i = 0; i < langs.length; i++) {
+      var lang = langs[i];
+      var idx = path.indexOf("/" + lang + "/");
+      var isTail = path === "/" + lang || path.indexOf("/" + lang) === path.length - lang.length - 1;
+      if (idx !== -1) { cur = lang; segStart = idx; break; }
+      if (isTail) { cur = lang; segStart = path.length - lang.length - 1; break; }
+    }
+
+    if (cur) {
+      var base = path.slice(0, segStart);
+      var rest = path.slice(segStart + cur.length + 1).replace(/^\/+/, "");
+      var target = (base + "/" + saved + "/" + rest).replace(/\/{2,}/g, "/");
+      location.replace(location.origin + target + location.search + location.hash);
+      return;
+    }
+
+    if (saved === defaultLang) return;
+    var target = baseClean + "/" + saved + "/";
+    location.replace(location.origin + target + location.search + location.hash);
+  })();
+</script>
+{{- end -}}

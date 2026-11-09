@@ -1,0 +1,42 @@
+baseURL: https://patelakash007.github.io/DSH-go-rewrite/
+title: "DSH-Go"
+theme: hextra
+defaultContentLanguage: en
+defaultContentLanguageInSubdir: false
+enableRobotsTXT: true
+enableGitInfo: false
+canonifyURLs: true
+
+languages:
+  en:
+    label: English
+    weight: 1
+    title: "DSH-Go — In-process Go reference implementation & Native Engine for DeepSeek Harness Agent"
+    params:
+      description: "In-process Go reference implementation and backend engine for the DeepSeek Harness Agent — Native Android rewrite by patelakash007."
+    menus:
+      main:
+        - name: "Docs"
+          pageRef: "/en/docs"
+          weight: 1
+        - name: "Tutorials"
+          pageRef: "/en/tutorials"
+          weight: 2
+        - name: "FAQ"
+          pageRef: "/en/faq"
+          weight: 3
+        - name: "Examples"
+          pageRef: "/en/examples"
+          weight: 4
+        - name: "GitHub"
+          url: "https://github.com/patelakash007/DSH-go-rewrite"
+          weight: 5
+
+params:
+  description: "DSH-Go: Native In-process Go reference implementation for DeepSeek Harness Agent"
+  navbar:
+    displayTitle: true
+    displayLogo: false
+  footer:
+    displayCopyright: true
+    displayPoweredBy: false

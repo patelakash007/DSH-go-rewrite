@@ -1,0 +1,3033 @@
+{
+  "$schema": "./tasks.schema.json",
+  "meta": {
+    "name": "DSH-Go Complete Native Implementation Task Matrix",
+    "version": "v2.1",
+    "createdAt": "2026-08-31T00:00:00+08:00",
+    "lastUpdatedAt": "2026-09-01T00:10:00+08:00",
+    "taskCountTotal": 99,
+    "taskCountByStatus": {
+      "pending": 0,
+      "in_progress": 0,
+      "completed": 82,
+      "blocked": 0,
+      "deferred": 11,
+      "skipped": 6
+    }
+  },
+  "upstreamSyncAnchor": {
+    "repoRemote": "https://github.com/deepseek-ai/deepseek-harness.git",
+    "repoLocalPath": "D:\\workspace\\python_workspace\\deepseek-harness",
+    "branch": "master",
+    "commitFullId": "cd5ef8148158c3a752a658978873241fdf8e2bbc",
+    "commitShortId": "cd5ef81481",
+    "commitDate": "2026-08-28T00:57:43+08:00",
+    "commitTitle": "Merge pull request #3248 from deepseek-harness/release/dsh-0.1.2-alpha.1",
+    "releaseTagSighted": "dsh-0.1.2-alpha.1",
+    "snapshottedSubsystemsDocs": [
+      "session-projection.md",
+      "session-reference.md",
+      "session-query.md",
+      "session-title.md",
+      "session-telemetry.md",
+      "persistence.md",
+      "storage.md",
+      "compaction.md",
+      "invariants.md",
+      "token-meter.md",
+      "filesystem.md",
+      "shell.md",
+      "subprocess.md",
+      "spill.md",
+      "jobs.md",
+      "terminal.md",
+      "settings.md",
+      "credentials.md",
+      "skills.md",
+      "commands.md",
+      "permission-presets.md",
+      "workspace.md",
+      "user-questions.md",
+      "web.md",
+      "lsp.md",
+      "code-runtime.md",
+      "workflow.md",
+      "subagent.md",
+      "feedback.md",
+      "schedule.md",
+      "slots.md",
+      "extensions.md",
+      "team.md",
+      "webhook.md",
+      "sandbox.md",
+      "typert.md",
+      "conversation.md",
+      "client-modules.md"
+    ],
+    "notes": "local any service table place has success capability point all base at up describe  commit time  official method repo lib source code and docs/subsystems/*.md doc doc organize manage 。afterproceed same step official method update new time ：execute `git fetch origin && git log <thisCommit>..origin/master -- docs/subsystems packages/*/src packages/*/README.md` obtain to  diff standard scope ，bynew increase /change update  subsystem back fill local any service table   diffs[] and new build for should any service 。"
+  },
+  "upstreamFutureSync": {
+    "lastSyncCommitId": "cd5ef8148158c3a752a658978873241fdf8e2bbc",
+    "lastSyncAt": "2026-08-31T20:30:00+08:00",
+    "pendingDiffs": [],
+    "history": [
+      {
+        "fromCommit": "(Initial creation)",
+        "toCommit": "cd5ef8148158c3a752a658978873241fdf8e2bbc",
+        "syncedAt": "2026-08-31T00:00:00+08:00",
+        "subsystemsAffected": [
+          "* (Initial baseline covering 60+ subsystems)"
+        ],
+        "tasksAffected": [
+          "(Initial creation of 81 tasks)"
+        ]
+      },
+      {
+        "fromCommit": "(None - local derivative)",
+        "toCommit": "(None - local derivative)",
+        "syncedAt": "2026-08-31T20:30:00+08:00",
+        "subsystemsAffected": [
+          "cache-affinity (local derivative)"
+        ],
+        "tasksAffected": [
+          "N01-N09 Cache hit rate alignment 9 MUST + 0 SHOULD"
+        ]
+      }
+    ]
+  },
+  "tasks": [
+    {
+      "id": "M01",
+      "level": "MUST",
+      "cluster": "cluster-1-core-driver",
+      "name": "Branded ID Type Encapsulation",
+      "description": "Branded/Bytes two branded struct kinds（SessionID、ToolCallID、ApprovalRequestId、JobId、SkillId、AttachmentId、CredentialRef、WorkspaceId、ProjectionId etc），prevent mixed string IDs。",
+      "ownerPkg": "pkg/brand",
+      "deps": [],
+      "tests": [
+        "tests/brand_ids_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/util/id-brand",
+        "packages/util/bytes"
+      ],
+      "status": "completed",
+      "priority": 1,
+      "estimationMd": "0.2",
+      "acceptance": [
+        "All cross-package contract parameters use branded types, no raw string/[]byte",
+        "Complete New/Parse/Zero/IsZero/String/MarshalJSON/UnmarshalJSON implementation",
+        "Incompatible ID types fail at compile time"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented Branded[T]/Bytes[T] generic wrappers + 9 concrete branded types (SessionID/ToolCallID/ApprovalRequestID/JobID/SkillID/AttachmentID/CredentialRef/WorkspaceID/ProjectionID) + constructors; tests/brand_ids_test.go 6 cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M02",
+      "level": "MUST",
+      "cluster": "cluster-1-core-driver",
+      "name": "Waterfall Middleware Chain Primitives",
+      "description": "Generic WaterfallFunc[T] + Chain composition + typed next(); 4-stage agent/pre-step/request/tools chain + approval + plan/goal injection reusing a single implementation.",
+      "ownerPkg": "pkg/waterfall",
+      "deps": [
+        "M01"
+      ],
+      "tests": [
+        "tests/waterfall_chain_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/waterfall"
+      ],
+      "status": "completed",
+      "priority": 1,
+      "estimationMd": "0.3",
+      "acceptance": [
+        "Waterfall multi-stage interceptor invocation strictly ordered",
+        "Short-circuits and returns correct error if next() is not called",
+        "Payload can be mutated by any middleware and passed downstream"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/waterfall: generic Handler[T] + NextFunc + Chain onion model with short-circuiting, error propagation, duplicate next panic protection, RunSafe; tests/waterfall_chain_test.go 8 cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M03",
+      "level": "MUST",
+      "cluster": "cluster-1-core-driver",
+      "name": "Scope Hierarchical Registry Primitives",
+      "description": "ScopeKey + Layer + ScopedLayers merge (nearest-scope-wins + rank). Reused by Tools/Skills/Commands/Credentials registries.",
+      "ownerPkg": "pkg/scope",
+      "deps": [
+        "M01"
+      ],
+      "tests": [
+        "tests/scope_layers_merge_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/scope"
+      ],
+      "status": "completed",
+      "priority": 1,
+      "estimationMd": "0.2",
+      "acceptance": [
+        "Correct read priority after host + scope stacking",
+        "Anonymous entries do not conflict with named entries",
+        "Later registration overrides earlier when rank is equal"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/scope: Key + Layer + ScopedLayers, nearest-scope-wins + rank/registration tie-breaking + anonymous entry isolation + deterministic Merge sorting; tests/scope_layers_merge_test.go 4 cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M04",
+      "level": "MUST",
+      "cluster": "cluster-1-core-driver",
+      "name": "Session Event Sourcing & 45+ Vocabulary",
+      "description": "45+ event types (Map->Derived Union pattern) + SessionEvent{seq,time,type,data,surfaceOp?,sourceEventSeqs?} + append strict invariants (turn open/close, step pairing, tool call<->result pairing).",
+      "ownerPkg": "pkg/session",
+      "deps": [
+        "M01",
+        "M30"
+      ],
+      "tests": [
+        "tests/session_event_vocab_test.go",
+        "tests/session_event_ordering_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/session"
+      ],
+      "status": "completed",
+      "priority": 1,
+      "estimationMd": "1.0",
+      "acceptance": [
+        "All 45+ event types round-trip consistently across serialization/deserialization",
+        "Invalid append order triggers invariant development error",
+        "Unmatched tool/call and tool/result triggers invariant error"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/session: 53 event vocabulary + EventData derived union + custom SessionEvent JSON round-trip + SessionLog.Append strict temporal invariants (turn/step/tool pairing) + SurfaceOp types; tests 7 cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M05",
+      "level": "MUST",
+      "cluster": "cluster-1-core-driver",
+      "name": "Session Derived Projection Functions",
+      "description": "deriveMessages() + foldRequestHeader() + foldEffectiveSandboxMode() + foldEffectiveApprovalPolicy() + foldGoalChange() + foldTodoWrite() + foldPlanMode() + foldPermissionPreset() + foldSessionTitle()。",
+      "ownerPkg": "pkg/session",
+      "deps": [
+        "M04"
+      ],
+      "tests": [
+        "tests/session_fold_consistency_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/session"
+      ],
+      "status": "completed",
+      "priority": 1,
+      "estimationMd": "0.8",
+      "acceptance": [
+        "Replay of 1k+ event log yields fold results identical to hot append results",
+        "deriveMessages output is shortened after compaction replace and subsequent messages work correctly"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/session/fold.go: EffectiveEvents (read-time surface replace) + deriveMessages + fold functions + FoldAll aggregation; tests/session_fold_consistency_test.go 3 cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M06",
+      "level": "MUST",
+      "cluster": "cluster-1-core-driver",
+      "name": "SessionHeader Metadata",
+      "description": "Version/ID/CreatedAt/Cwd/ParentSession/SeedLength/Origin/DelegationDepth/AgentPreset；Persistence key target record 、fork lineage、subagent pass attribute deep degree full rely it 。",
+      "ownerPkg": "pkg/session",
+      "deps": [
+        "M01"
+      ],
+      "tests": [
+        "tests/session_header_versioning_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/session"
+      ],
+      "status": "completed",
+      "priority": 1,
+      "estimationMd": "0.2",
+      "acceptance": [
+        "SESSION_FORMAT_VERSION andmeta count data order list ize /anti order list ize consistent",
+        "unknown Header version fail-closed reject reading",
+        "fork/cold-resume after ParentSession/SeedLength correctlywritten"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/session/header.go：SessionHeader{Version/ID/CreatedAt/Cwd/ParentSession/SeedLength/Origin/DelegationDepth/AgentPreset} + order list ize  fail-closed versionvalidate + Fork spectrum system derive；tests/session_header_versioning_test.go 4  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M07",
+      "level": "MUST",
+      "cluster": "cluster-1-core-driver",
+      "name": "LLM Provider Seam + Streaming Protocol",
+      "description": "LLMAdapter interface + Message/ContentBlock(text/tool_use/tool_result/image) + StreamChunk(text/reasoning/tool-call) + ToolSchema + LlmFailure classify + DeepSeek REST+SSE Implemented。",
+      "ownerPkg": "pkg/llm + pkg/llm/provider_deepseek",
+      "deps": [
+        "M01",
+        "M38",
+        "M39"
+      ],
+      "tests": [
+        "tests/llm_stream_roundtrip_test.go",
+        "tests/llm_provider_deepseek_integration_test.go (requires API key)"
+      ],
+      "upstreamRefs": [
+        "packages/llm/llm + providers"
+      ],
+      "status": "completed",
+      "priority": 2,
+      "estimationMd": "0.8",
+      "acceptance": [
+        "DeepSeek official model /chat/completions(stream=true) can receive reasoning + tool_call complete chunk",
+        "LlmFailure{overload/rate-limit/response-refusal/context-overflow} can reflect map correctly"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/llm：Message/ContentBlock(4kind)/StreamChunk/ToolSchema/Usage(includingcachefields)/LlmFailure classify + provider_deepseek REST+SSE adapt pair device (per-request resolve key + failreflect map )；tests/llm_stream_roundtrip_test.go 4  cases PASS(mock SSE)"
+        }
+      ]
+    },
+    {
+      "id": "M08",
+      "level": "MUST",
+      "cluster": "cluster-1-core-driver",
+      "name": "Agent Registry + Turn/Step Dual Loop",
+      "description": "Agent interface(Run/Steer/Inject/Followup/Dispose/Cancel)+ Inbox dual queue(turn/step) + Turn cycle loop (turn/start→claim→pre-step→multiStep→turn-stopping→turn/end)+ Step cycle loop (step/start→derive→agent/request→llm/stream→assistant/chunk*→message→toolsexecute→step/end)+ single Turn serializedensure。",
+      "ownerPkg": "pkg/agent + pkg/agent/loop.go",
+      "deps": [
+        "M02",
+        "M03",
+        "M04",
+        "M05",
+        "M07",
+        "M09",
+        "M23"
+      ],
+      "tests": [
+        "tests/agent_loop_turn_step_dual_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/agent + agent-loop"
+      ],
+      "status": "completed",
+      "priority": 2,
+      "estimationMd": "2.5",
+      "acceptance": [
+        "same 1  Agent 2   Followup in running phase space serializedqueued，pending turn reject correctly",
+        "step/tool on error，agent/error written log and turn closes as interrupted"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/agent：Agent(Run/Followup/Dispose/Cancel) + turn queue(capacity2) + worker serializedhandle manage  + Turn/Step dual cycle loop (turn/start→pre-step→multiStep→stopping→end) + toolsstream water thread execute + error interrupted close close ；tests/agent_loop_turn_step_dual_test.go 5  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M09",
+      "level": "MUST",
+      "cluster": "cluster-2-planning",
+      "name": "SystemPrompt Assembly + Section Registry",
+      "description": "PromptSection{name/order/text} + queue order combine and  + tools schema inject；ordererror session lead cause model type execute as drift move 。",
+      "ownerPkg": "pkg/sysprompt",
+      "deps": [
+        "M01",
+        "M48"
+      ],
+      "tests": [
+        "tests/sysprompt_section_ordering_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/system-prompt"
+      ],
+      "status": "completed",
+      "priority": 2,
+      "estimationMd": "0.5",
+      "acceptance": [
+        "persona → policy → runtime-context-snapshot → plan:policy → tools schema  orderandraw edition step-by-step execute  diff consistent"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/sysprompt：Section{Name/Order/Text} + Assembler ordered assembly + order normal volume (100/200/300/500/600/700) + ToolsSectionText tools schema word classic order inject；tests/sysprompt_section_ordering_test.go 5  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M10",
+      "level": "MUST",
+      "cluster": "cluster-2-planning",
+      "name": "PromptContext Dynamic Registry & Snapshot",
+      "description": "PromptContext{name/order/text(AssembleCtx)} + runtime-context-snapshot user/message；compaction delete eliminate old up down doc afterstill keep retain most new fast photo ，and M09 group combine construct succeed complete prompt output input surface 。",
+      "ownerPkg": "pkg/sysprompt",
+      "deps": [
+        "M09"
+      ],
+      "tests": [
+        "tests/prompt_context_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/system-prompt/context-prompt"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.3",
+      "acceptance": [
+        "dynamically add/remove PromptContext afternext round assemble take effect/invalidate",
+        "compaction after runtime-context-snapshot preserve latest snapshot"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/sysprompt/context.go：ContextRegistry(Register/Unregister/Compute/hash diff/Snapshot) + GoalRoundContext(proceed round inject，complete afterstop stop )；tests/prompt_context_test.go 4  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M11",
+      "level": "MUST",
+      "cluster": "cluster-2-planning",
+      "name": "Plan Mode Soft Guidance + Approval Exit",
+      "description": "plan:policy Prompt Section + plan/mode log + exit_plan_mode tools + UserQuestion review batch (viaonly remove policy section)。",
+      "ownerPkg": "pkg/plan",
+      "deps": [
+        "M02",
+        "M04",
+        "M09",
+        "M14",
+        "M23",
+        "M41"
+      ],
+      "tests": [
+        "tests/plan_mode_approval_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/plan-mode"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.8",
+      "acceptance": [
+        "enter input  plan mode afternext roundrequest seek  plan:policy section injectsucceed",
+        "exit_plan_mode → UserQuestion review batch via → plan:policy section down timesrequest seek not out now ；review batch rejectrule still then save in"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/plan：Enter/Exit(plan/mode events + plan:policy section inject/remove) + ExitPlanModeTool(review batch viaonly remove，rejectkeep retain )；tests/plan_mode_approval_test.go 3  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M12",
+      "level": "MUST",
+      "cluster": "cluster-2-planning",
+      "name": "Goal System (State Machine + Turn Driver + 6 Tools)",
+      "description": "GoalPhase/CAS Revision/goal/change events + goal-round-driver turn-stopping monitor listen  + 6   goal_* tools(list/set_phase/set_description/set_max_rounds/add_blocker/report_blocker) + concludeTurn result end  Turn。",
+      "ownerPkg": "pkg/goal",
+      "deps": [
+        "M02",
+        "M04",
+        "M05",
+        "M23",
+        "M25",
+        "M41"
+      ],
+      "tests": [
+        "tests/goal_rounddriver_cas_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/goal"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "1.0",
+      "acceptance": [
+        "set_goal(active, maxRounds=5) noneuseuser output input condition condition down self dynamic proceed round run complete  5 round ",
+        "goal_report_blocker → concludeTurn local round  turn/end correctlywriteout ；CAS Revision conflict conflict report errorand send keep protect "
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/goal：Goal state machine(CAS revision) + RoundDriver proceed round (on turn-stopping，complete afterstop stop ) + 6   goal_* tools(report_blocker concludeTurn)；tests/goal_rounddriver_cas_test.go 4  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M13",
+      "level": "MUST",
+      "cluster": "cluster-2-planning",
+      "name": "Todo Full Replacement Write",
+      "description": "todo/write events + foldTodoWrite + todo_write tools。",
+      "ownerPkg": "pkg/todo",
+      "deps": [
+        "M04",
+        "M05",
+        "M23"
+      ],
+      "tests": [
+        "tests/todo_write_replace_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/todo"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.2",
+      "acceptance": [
+        "multitimes todo/write each timesatomic replacement，fold andraw edition  last-write-wins lang definition consistent"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/todo：TodoItem + TodoWriteTool(atomic replacement + write todo/write events) + Current(fold derive)；tests/todo_write_replace_test.go 1  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M14",
+      "level": "MUST",
+      "cluster": "cluster-2-planning",
+      "name": "User Questions Seam",
+      "description": "UQ serve service interface{Ask(ctx, options) → (idx int, custom string, err)} + provider_stub(same step block block ，testuse) + SDK injecttrue real  impl；support multiSelect + intent standard tag 。",
+      "ownerPkg": "pkg/userq",
+      "deps": [
+        "M01"
+      ],
+      "tests": [
+        "tests/userq_provider_swap_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/interaction/user-questions"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.3",
+      "acceptance": [
+        "stub returndefault acknowledge select item ；replace swap  provider after Ask route by to self define definition Implementedcorrectly"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/userq：Service(Ask/AskDetailed + SetProvider switch) + QuestionOptions(multiSelect/intent) + StubProvider；tests/userq_provider_swap_test.go 4  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M15",
+      "level": "MUST",
+      "cluster": "cluster-7-config",
+      "name": "Commands (Slash Commands)",
+      "description": "CommandDefinition + command/run & command/done events + ctx.commands register/list/execute；/plan /goal etccommand command input port 。",
+      "ownerPkg": "pkg/commands",
+      "deps": [
+        "M01",
+        "M03",
+        "M04"
+      ],
+      "tests": [
+        "tests/commands_slash_dispatch_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/interaction/commands"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.3",
+      "acceptance": [
+        "/plan off via command direct connect written plan/mode(off) eventsand non  user/message；command/run/command/done complete"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/commands：CommandDefinition + Registry(register/list/get/dispatch) + inner set  plan/goal command command  + command/run & command/done events；tests/commands_slash_dispatch_test.go 4  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M16",
+      "level": "MUST",
+      "cluster": "cluster-2-planning",
+      "name": "Session Projections Registry",
+      "description": "ProjectionDefinition[State any] + register / snapshot / subscribe(changelog)；SDK side readderivestatus unique 1 standard standard interface，forbid stop direct connect read events。",
+      "ownerPkg": "pkg/session/projection.go",
+      "deps": [
+        "M04",
+        "M05"
+      ],
+      "tests": [
+        "tests/session_projection_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/session-projection"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.5",
+      "acceptance": [
+        "inject registry  Goal/Todo/Plan/Sandbox 4  deliver shadow after subscribe changelog incrementalcorrectly",
+        "snapshot and fold* result result consistent"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/session/projection.go：ProjectionDefinition(Apply/Merge) + Registry(RegisterProjection top layer generic type /ApplyEvents incremental/changelog/rebuild/snapshot)；tests/session_projection_test.go 2  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M17",
+      "level": "MUST",
+      "cluster": "cluster-2-planning",
+      "name": "Session References (Cross-session & File Mention)",
+      "description": "@session/xxx and #path/file lang method  mention parse + PreparedReferencedMessage + stable define errorcode ；written user/message source=reference。",
+      "ownerPkg": "pkg/session/reference.go",
+      "deps": [
+        "M01",
+        "M04",
+        "M35"
+      ],
+      "tests": [
+        "tests/session_reference_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/session-reference"
+      ],
+      "status": "completed",
+      "priority": 4,
+      "estimationMd": "0.4",
+      "acceptance": [
+        "useuser consume rest  mention 3   session+doc item  → PreparedReferencedMessage splice input up down doc correctly",
+        "refer usenot save in session/doc item  → returnclassifyerrorcode （SESSION_NOT_FOUND / FILE_OUT_OF_WORKSPACE etc）"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/session/reference.go：@session/<id> and #<path/file> mention parse + Prepare main stream process  + PreparedReferencedMessage{Content/AdditionalContext/References} + 7 kindstable define errorcode (including SESSION_NOT_FOUND/FILE_NOT_FOUND/FILE_OUT_OF_WORKSPACE) + self refer use/over limit /pre compute reject + WorkspaceFileResolver(path-only exceed boundary determine define )；tests/session_reference_test.go 7  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M18",
+      "level": "MUST",
+      "cluster": "cluster-1-core-driver",
+      "name": "Agent Cancel Reason Taxonomy",
+      "description": "{kind:user}/{parent}/{hook reason}/{disposed}/{legacy} 5 types → TurnEndReason.aborted。",
+      "ownerPkg": "pkg/agent/cancel.go",
+      "deps": [
+        "M04",
+        "M08"
+      ],
+      "tests": [
+        "tests/agent_cancel_cause_classify_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/agent/Agent.ts"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.2",
+      "acceptance": [
+        "4 typesfetch consume route path split distinguish triggerafter，turn/end reason fieldsin  aborted.reason correctlyzone split  5 kind"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/agent/cancel.go：5 kind CancelCause(user/parent/hook/disposed/legacy) + RecordCancel/ExtractCancelCause；tests/agent_cancel_cause_classify_test.go 3  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M19",
+      "level": "MUST",
+      "cluster": "cluster-1-core-driver",
+      "name": "Request Header Snapshot + Request/Context Routing",
+      "description": "EpochHeader{config/system/tools} + RequestContext{provider/model/contextWindow} + reason in {initial/resume/change/series}。",
+      "ownerPkg": "pkg/session",
+      "deps": [
+        "M04",
+        "M05"
+      ],
+      "tests": [
+        "tests/request_header_rebuild_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/session/request-header"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.3",
+      "acceptance": [
+        "most new 1 times request/header snapshot → reassemble Prompt + Schema andreal edge send send  payload step-by-step fieldsconsistent"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/session/request_header.go：EpochHeader + RequestContext(reason) + FoldEpochHeader/FoldRequestContext + RebuildFromHeader(compaction aftercan re build )；tests/request_header_rebuild_test.go 2  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M20",
+      "level": "MUST",
+      "cluster": "cluster-1-core-driver",
+      "name": "session/end-seed Seed Boundary Marker",
+      "description": "Resume/Fork afternumber 1   live written  marker events，define position  cold stored vs live work split boundary 。",
+      "ownerPkg": "pkg/session",
+      "deps": [
+        "M04"
+      ],
+      "tests": [
+        "tests/end_seed_bracket_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/session"
+      ],
+      "status": "completed",
+      "priority": 4,
+      "estimationMd": "0.1",
+      "acceptance": [
+        "Fork/Resume stream process aftermust write end-seed；compaction half open include number define position depend depend it "
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/session/endseed.go：MarkEndSeed(carry carry parent session dialogue ) + SeedEndSeq/IsAfterEndSeed split boundary determine define  + EndSeedMarker head part typessub long degree ；tests/end_seed_bracket_test.go 3  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M21",
+      "level": "MUST",
+      "cluster": "cluster-1-core-driver",
+      "name": "SurfaceOp (append/replace) + foldSurface",
+      "description": "{op:'replace',start,end} world era ；foldSurface(events)=>nodes+replacements。compaction replace swap node point then is  surface replace。",
+      "ownerPkg": "pkg/session/surface.go",
+      "deps": [
+        "M04"
+      ],
+      "tests": [
+        "tests/compaction_replace_surface_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/session/surface"
+      ],
+      "status": "completed",
+      "priority": 4,
+      "estimationMd": "0.4",
+      "acceptance": [
+        "append 100 events after replace range [3,80] → deriveMessages pre afterconsume rest list table word node consistent"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/session/surface.go FoldSurface：readtime should use surface replace → nodes + replacements，source events append-only pure clean ；tests/compaction_replace_surface_test.go 2  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M22",
+      "level": "MUST",
+      "cluster": "cluster-3-safety",
+      "name": "PreToolDecision Three-state (allow/deny/ask)",
+      "description": "tools/pre-execute waterfall return3 state  + approval ask→allowed-once lang definition (only release execute local times)。",
+      "ownerPkg": "pkg/tools",
+      "deps": [
+        "M02",
+        "M27"
+      ],
+      "tests": [
+        "tests/tools_predecision_ask_once_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/tools/pre-execute"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.3",
+      "acceptance": [
+        "ask is useuser via1 timesafteronly for should  tool/call execute，down 1 timessame toolscallcontinue proceed  ask；not session is permanent long release execute "
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/tools/predecision.go：PreToolDecision 3 state (reuse approval.Decision) + PreDecisionMiddleware(deny short route /ask→AskFunc allowed-once) + DecisionFromApproval/AskFromApproval(connect  M27)；tests/tools_predecision_ask_once_test.go 4  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M23",
+      "level": "MUST",
+      "cluster": "cluster-1-core-driver",
+      "name": "Tool Execution 4-Stage Waterfall Chain",
+      "description": "pre-execute → execute(can swap  signal) → post-execute(accept/block/attach ctx) → result。",
+      "ownerPkg": "pkg/tools/pipeline.go",
+      "deps": [
+        "M02",
+        "M48"
+      ],
+      "tests": [
+        "tests/tools_waterfall_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/tools"
+      ],
+      "status": "completed",
+      "priority": 2,
+      "estimationMd": "0.8",
+      "acceptance": [
+        "4 level each level all has  middleware show example ：deny/swap parameter /truncate/add  meta each communicate channel work operate ",
+        "execute in swap  signal cancel → post block → result carry up  isError correctly"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/tools/pipeline.go：Tool + ToolCallRequest/Result + ExecContext + 4 level  Waterfall chain (pre/execute/post/result) + Signal cancel lang definition  + WithTool injecttrue real Implemented；tests/tools_waterfall_test.go 8  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M24",
+      "level": "MUST",
+      "cluster": "cluster-3-safety",
+      "name": "Tool Restriction allow/deny",
+      "description": "Scope level  tool mask + intersect + scope tool exempt。Subagent parent limit sub capability force  / Preset hidden hide tools。",
+      "ownerPkg": "pkg/tools/restriction.go",
+      "deps": [
+        "M03",
+        "M23"
+      ],
+      "tests": [
+        "tests/tools_restriction_intersect_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/tools/restriction"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.3",
+      "acceptance": [
+        "host layer  deny + scope layer  exempt aftertoolsrecover reuse can use；2 layer mutually cross correctly"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/tools/restriction.go：Restriction{Allow/Deny} + RestrictionSet(host→scope has order layer stack , nearest-scope-wins step-by-step layer parse) + Filter(sub era manage parent limit sub /pre setting hidden hide tools)；tests/tools_restriction_intersect_test.go 5  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M25",
+      "level": "MUST",
+      "cluster": "cluster-3-safety",
+      "name": "ToolRunContext deferContext + concludeTurn",
+      "description": "composite tool embed suite split send communicate channel  + end stop local  turn  auth risk standard record 。",
+      "ownerPkg": "pkg/tools/execution.go",
+      "deps": [
+        "M08",
+        "M23"
+      ],
+      "tests": [
+        "tests/tools_conclude_turn_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/tools/types ToolRunContext"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.3",
+      "acceptance": [
+        "Goal report_blocker call concludeTurn → turn establish immediate walk  turn-stopping/turn/end，not then down 1   Step"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/tools/execution.go：ToolRunContext(meta/deferContext/concludeTurn) + WithConclude/ConcludeFrom context pass broadcast ；tests/tools_conclude_turn_test.go 4  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M26",
+      "level": "MUST",
+      "cluster": "cluster-3-safety",
+      "name": "Sandbox Seam (3 Modes)",
+      "description": "mode in {read-only / workspace-write / danger-full-access} + {root path, enforced} meta group ；Bash/FS consume cost entity system 1 。",
+      "ownerPkg": "pkg/sandbox",
+      "deps": [
+        "M01"
+      ],
+      "tests": [
+        "tests/sandbox_mode_apply_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/sandbox/sandbox"
+      ],
+      "status": "completed",
+      "priority": 2,
+      "estimationMd": "0.3",
+      "acceptance": [
+        "same 1 session dialogue  Sandbox Mode → Bash & FS 2  consume cost entity all obtain to consistent ExecutionPolicy（enforced + scope）"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/sandbox：SandboxMode(3 mode) + ConfinedSandboxMode + SandboxEnforcement(full/partial) + SandboxExecutionPolicy{Mode/WorkspaceRoot/SessionID} + SandboxPolicyService(optimal first level : display mode >session dialogue >default acknowledge  + root back persist ) + SandboxProvider Confine fail-closed(SANDBOX_UNAVAILABLE) + RunnerFailureRule verify data rule rule ；tests/sandbox_mode_apply_test.go 6  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M27",
+      "level": "MUST",
+      "cluster": "cluster-3-safety",
+      "name": "Approval Policy Seam",
+      "description": "policy in {allow-all / deny-all / ask-dangerous / ask-dangerous-tool-edit} + useuser level  override + session dialogue level  scope override + ask→allowed-once。",
+      "ownerPkg": "pkg/approval",
+      "deps": [
+        "M03",
+        "M14",
+        "M28"
+      ],
+      "tests": [
+        "tests/approval_override_order_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/approval"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.5",
+      "acceptance": [
+        "preset level + user level + session level 3 layer  override ordercorrectly；ask call UQ succeed/failchain route complete"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/approval：Policy 4 enum action  + Effective(Source review count ) + Decision 3 state (allow/deny/ask reuse M22) + Service(3 layer  override: session dialogue >useuser >pre setting , PresetPolice injectbreak loop ) + ask→allowed-once(only release execute when times, down timessame toolscontinue proceed  ask) + UQ fail fail-closed deny；tests/approval_override_order_test.go 7  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M28",
+      "level": "MUST",
+      "cluster": "cluster-3-safety",
+      "name": "Permission Presets Composition Knob",
+      "description": "{sandboxMode, approvalPolicy} pre setting table  + useuser self define definition derivestatus。",
+      "ownerPkg": "pkg/presets/permission_presets.go",
+      "deps": [
+        "M26",
+        "M27"
+      ],
+      "tests": [
+        "tests/permission_presets_combo_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/interaction/permission-presets"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.2",
+      "acceptance": [
+        "safe/danger/review/custom 4 pre setting  + derive UI/SDK statusandraw edition 1 1 for should "
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/presets/permission_presets.go：PermissionPreset{sandboxMode, approvalPolicy} group combine meta group  + 4 pre setting table (safe/danger/review/custom) + Resolve back persist  custom + ApprovalMapper/SandboxMapper injectfunction count (provide  approval singleto connect thread ) + DerivedState(custom derivestandard record )；tests/permission_presets_combo_test.go 4  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M29",
+      "level": "MUST",
+      "cluster": "cluster-3-safety",
+      "name": "Attachment Image Reference Pattern",
+      "description": "ImageBlock{url? / reference:AttachmentId} + attachment storage + durable reference parse。",
+      "ownerPkg": "pkg/attachment",
+      "deps": [
+        "M01"
+      ],
+      "tests": [
+        "tests/attachment_ref_resolve_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/attachment"
+      ],
+      "status": "completed",
+      "priority": 4,
+      "estimationMd": "0.4",
+      "acceptance": [
+        "session dialogue pressure shrink /cross-sessionrefer use  Attachment via durable route path parsenot invalidate"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/attachment：ImageMediaType + ImageAttachmentRef(AttachmentID=sha256 extract need , Bytes/Width/Height) + StoredImageAttachment + Store connect seam (SaveImage/ReadImage/ImageHostPath) + FileBackedStore(content-addressed + host main doc item afterside  + readre compute extract need ) + ResolveReference durable cross-session/pressure shrink parse；tests/attachment_ref_resolve_test.go 5  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M30",
+      "level": "MUST",
+      "cluster": "cluster-3-safety",
+      "name": "Invariant Registry Invariant Validation",
+      "description": "ctx.invariants.register(pkgName, installer) + package attribute attribute report error（INVARIANT + pkgName prefix）。open send phase start use，produce produce close 。",
+      "ownerPkg": "pkg/invariant",
+      "deps": [],
+      "tests": [
+        "tests/invariant_pkg_attribution_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/runtime-diagnostics/invariants"
+      ],
+      "status": "completed",
+      "priority": 2,
+      "estimationMd": "0.2",
+      "acceptance": [
+        "turn alreadyopen then times turn/start → invariant report errorcarry package name ；produce produce construct build close close  invariant open close afternot report error"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/invariant：Registry bypackage split group inject registry  + carry package attribute attribute   InvariantError + full local open close (SetEnabled/construct build phase can close ) + panic isolate + violate rule account local ；tests/invariant_pkg_attribution_test.go 6  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M31",
+      "level": "MUST",
+      "cluster": "cluster-3-safety",
+      "name": "Token Meter Accounting & Budget",
+      "description": "per-request prompt/completion token + session-level budget cap + table surface node point define value 。",
+      "ownerPkg": "pkg/tokenmeter",
+      "deps": [
+        "M04"
+      ],
+      "tests": [
+        "tests/token_meter_budget_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/util/token-meter"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.3",
+      "acceptance": [
+        "pre compute  10k tokens → reach to up limit afternext roundrequest seek open start pre by  budget deny rejectandnot produce produce true real  LLM call"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/tokenmeter：Meter(per-request Record prompt/completion + session dialogue level accumulate count  + budget cap + HasBudget/BudgetDenied/Check request seek pre reject) + SurfacePricing table surface node point define value ；tests/token_meter_budget_test.go 4  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M32",
+      "level": "MUST",
+      "cluster": "cluster-1-core-driver",
+      "name": "Agent Preset Seam",
+      "description": "ctx.agentPresets.{mount/composeFrom/standingKeyFor/recompose/select}。",
+      "ownerPkg": "pkg/presets/agent_presets.go",
+      "deps": [
+        "M03",
+        "M08"
+      ],
+      "tests": [
+        "tests/agent_preset_compose_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/agent-preset"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.3",
+      "acceptance": [
+        "not same  preset as not same  Agent real example provideexclusive establish  tools/prompt group combine ；standing key correctly"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/presets/agent_presets.go：AgentPreset{Tools/Prompt} + PresetRegistry(Mount/Select base at  scope) + ComposeFrom(toolsand collection +prompt splice connect )；tests/agent_preset_compose_test.go 3  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M33",
+      "level": "MUST",
+      "cluster": "cluster-1-core-driver",
+      "name": "Agent Initiator Context",
+      "description": "withInitiator(agent, op)/requireInitiator()/withoutInitiator；safe full attribute cause 。",
+      "ownerPkg": "pkg/agent/initiator.go",
+      "deps": [
+        "M08"
+      ],
+      "tests": [
+        "tests/initiator_causal_trace_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/agent initiator module"
+      ],
+      "status": "completed",
+      "priority": 4,
+      "estimationMd": "0.2",
+      "acceptance": [
+        "requireInitiator innone has  withInitiator package wrap down calldirect connect  panic or return Unauthorized result construct ize error"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/agent/initiator.go：Initiator{AgentID/Op} + WithInitiator/RequireInitiator/WithoutInitiator/MustInitiator + UnauthorizedInitiatorError；tests/initiator_causal_trace_test.go 4  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M34",
+      "level": "MUST",
+      "cluster": "cluster-1-core-driver",
+      "name": "agent/request-error Retry Waterfall",
+      "description": "RequestErrorAction{kind:'retry'}，LLM pass load /speed rate limit control display mode retrycommunicate channel 。",
+      "ownerPkg": "pkg/agent + waterfall",
+      "deps": [
+        "M02",
+        "M07",
+        "S15"
+      ],
+      "tests": [
+        "tests/agent_request_error_retry_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/agent-loop request-error waterfall"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.3",
+      "acceptance": [
+        "S15 Retry and request-error waterfall assist same ；over pass  max timesretryby  error close close  turn"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/agent/requesterror.go：RequestErrorAction{retry/abort} + RequestErrorPayload + RequestErrorWaterfall(M02 onion onion model type  + self define definition short route ) + TerminalRetryDecision(can retryandnotover  max→retry, whether rule  abort) + ResolveRequestError/S15 assist same  + RecordRequestError write agent/error；tests/agent_request_error_retry_test.go 5  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M35",
+      "level": "MUST",
+      "cluster": "cluster-6-file-process",
+      "name": "Filesystem Seam + obs-policy + tool-fs",
+      "description": "FsTarget/Version/Info/EditRequest/WriteIntent + write/edit/resolve/listDir/stat + fs/write-intent fs/edit-intent fs/observed events + observe inspect policy policy (first readafterwrite)。",
+      "ownerPkg": "pkg/fs + pkg/fs/fs_local",
+      "deps": [
+        "M01",
+        "M04",
+        "M23",
+        "M26"
+      ],
+      "tests": [
+        "tests/filesystem_obs_policy_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/fs/fs + fs-local + fs-observation-policy + tool-fs"
+      ],
+      "status": "completed",
+      "priority": 2,
+      "estimationMd": "1.2",
+      "acceptance": [
+        "has  obs-policy + notobserve inspect  versionrejectraw  fs_write；and send 2   fs_edit same 1 execute  → number 2  cause  FsVersion mismatch report  FS_STALE_VERSION"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/fs：FsTarget/FsVersion/FsInfo/FsEditRequest/FsWriteIntent + LocalFS(resolve/stat/read/write/edit/listDir + stable define errorcode  + raw sub write + versioncommand card ) + ObservationPolicy(first readafterwrite: DecideWrite/DecideEdit + PolicyFS gate surface )；tests/filesystem_obs_policy_test.go 6  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M36",
+      "level": "MUST",
+      "cluster": "cluster-6-file-process",
+      "name": "Subprocess Seam",
+      "description": "SubprocessSpawnSpec + tree terminate + CollectedOutput{truncated/spillPath} + scrubbedParentEnv(DSH_* scrub)。",
+      "ownerPkg": "pkg/subprocess + pkg/subprocess/local",
+      "deps": [
+        "M01",
+        "M42"
+      ],
+      "tests": [
+        "tests/subprocess_tree_terminate_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/shell/subprocess"
+      ],
+      "status": "completed",
+      "priority": 2,
+      "estimationMd": "0.8",
+      "acceptance": [
+        "Win: taskkill /T；*nix: SIGTERM → grace → SIGKILL；sub enter process tree full part clean manage noneresidual retain ；CollectedOutput over pass threshold value trigger Spill written"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/subprocess：SubprocessSpawnSpec(complete full display mode ) + SubprocessHandle(pid/collected/Done/Terminate) + CollectedOutput(truncate+spill) + outputReader(offset-based non consume cost ) + LocalRuntime(os/exec + tree-terminate: Win taskkill /T, *nix enter process group  SIGTERM→grace→SIGKILL + DSH_* scrub + spill) + level platform doc item  platform_unix/windows；tests/subprocess_tree_terminate_test.go 4  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M37",
+      "level": "MUST",
+      "cluster": "cluster-6-file-process",
+      "name": "Shell/Bash Seam + tool-bash",
+      "description": "ShellExecRequest→resolve()→ShellExecSpec + RunResult(exitCode/signal/timedOut/aborted/timeoutMs 5 fieldscorrect cross ) + SandboxExecutionPolicy + pre platform  run / afterplatform  Job。",
+      "ownerPkg": "pkg/shell + pkg/shell/local",
+      "deps": [
+        "M01",
+        "M23",
+        "M26",
+        "M36",
+        "M46",
+        "S11"
+      ],
+      "tests": [
+        "tests/bash_subprocess_spill_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/shell/shell + bash-local + bash-sandbox + tool-bash"
+      ],
+      "status": "completed",
+      "priority": 2,
+      "estimationMd": "1.0",
+      "acceptance": [
+        "bash('seq 1 100000') → default acknowledge  64kb truncate → read spillPath capability take to complete 100000 execute ；timeout 30s to reach  RunResult.timedOut=true"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/shell：ShellExecRequest→Resolve→ExecSpec(level platform  argv: bash -c / cmd /c) + RunResult 5 correct cross fields(exitCode/signal/timedOut/aborted/timeoutMs) + Shell.Run(pre platform , 64KB truncate+spill take completestream , timeouttree end stop  timedOut) + BashTool/FormatOutput(tool-bash)；tests/bash_subprocess_spill_test.go 3  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M38",
+      "level": "MUST",
+      "cluster": "cluster-7-config",
+      "name": "Settings Seam (ctx.settings) + pathop + CAS + secrets",
+      "description": "SettingsNamespace + SettingsScope(get/watch/update/replace) + SettingsPathOp{set/unset} + describe(redactSecrets:true) + expectedRevision CAS + secrets role redaction。",
+      "ownerPkg": "pkg/settings + pkg/settings/file",
+      "deps": [
+        "M01",
+        "M03",
+        "M45"
+      ],
+      "tests": [
+        "tests/settings_pathop_secrets_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/settings/settings + settings-file"
+      ],
+      "status": "completed",
+      "priority": 2,
+      "estimationMd": "0.8",
+      "acceptance": [
+        "secret fields describe({redactSecrets:true}) only give out  path + set/unset operate operate position ，value full detach sensitive ；and send 2   replace afterwrite expectedRevision not token trigger CAS error"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/settings：SettingsNamespace(secret standard record ) + SettingsScope(host/session split layer  nearest-wins + PathOp set/unset + CAS revision + describe detach sensitive )；as  pkg/scope.Layer patch fill  Get/Has/Unregister；tests/settings_pathop_secrets_test.go 3  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M39",
+      "level": "MUST",
+      "cluster": "cluster-7-config",
+      "name": "Credentials & Authorization Seam",
+      "description": "CredentialRef(POSIX change volume name item card ) + per-request resolve + describe/writable + set/unset + AuthorizationFlow{list/begin/cancel} + record modify CAS。",
+      "ownerPkg": "pkg/credentials + pkg/credentials/local",
+      "deps": [
+        "M01",
+        "M03",
+        "M38",
+        "S06"
+      ],
+      "tests": [
+        "tests/credentials_per_request_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/credentials/credentials + credentials-local + authorization"
+      ],
+      "status": "completed",
+      "priority": 2,
+      "estimationMd": "0.8",
+      "acceptance": [
+        "LLM request seek in each round  resolve 1 times CredentialRef；fix modify  env afternext roundrequest seek inspect to new value ；authorization.flow inject registry succeedand can  begin"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/credentials：Store(per-request Resolve + Storage Domain CAS persistence + describe detach sensitive ) + AuthorizationService(Flow list/begin/cancel)；S06 authorize auth stream  stub depend depend in Store/Service alreadythen ready ；tests/credentials_per_request_test.go 4  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M40",
+      "level": "MUST",
+      "cluster": "cluster-7-config",
+      "name": "Skill System 6-layer Rank + fsnotify Watcher + tool-skill",
+      "description": "SkillProvider.list/get + SkillCandidate{rank/locator} + 6 layer  rank(project-dsh → project-agents → custom → user-dsh → user-agents → bundled) + fsnotify + skills/change events + modelInvocable/userInvocable policy。",
+      "ownerPkg": "pkg/skills",
+      "deps": [
+        "M01",
+        "M03",
+        "M04",
+        "M23"
+      ],
+      "tests": [
+        "tests/skills_registry_fsnotify_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/skills + providers + tool-skill"
+      ],
+      "status": "completed",
+      "priority": 2,
+      "estimationMd": "0.8",
+      "acceptance": [
+        "new build  <proj>/.dsh/skills/my-skill.md → down 1 times skills.list out now ；delete eliminate afterdown 1 timesnot out now ；skill(name) toolsinject injected-context user/message correctly"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/skills：Skill{rank/modelInv/userInv/content} + SkillRegistry(6 layer default acknowledge target record  project-dsh→bundled, same name  rank high entity win , Scan/List/Get/Candidates) + Markdown parse + Hash change update point fingerprint  + Watch round query (Windows friendly good , can swap  fsnotify) + SkillTool(skill(name) inject + invocable policy)；tests/skills_registry_fsnotify_test.go 4  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M41",
+      "level": "MUST",
+      "cluster": "cluster-7-config",
+      "name": "Commands Human Commands (aligned with M15, cluster-7)",
+      "description": "see  M15。this handle  cluster-7 index refer ，Implementedtime and M15 combine and 。",
+      "ownerPkg": "pkg/commands",
+      "deps": [
+        "M15"
+      ],
+      "tests": [
+        " (see M15)"
+      ],
+      "upstreamRefs": [
+        " (see M15)"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.0",
+      "acceptance": [
+        "combine and  M15 verify collect 。"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "and M15 combine and ，preventre reuse ；M15 complete succeed afterthis statusimmediate compute complete succeed "
+        },
+        {
+          "at": "2026-08-31",
+          "note": "M15 alreadycomplete succeed ，M41 with of complete succeed "
+        }
+      ],
+      "meta": {
+        "aliasOf": "M15"
+      }
+    },
+    {
+      "id": "M42",
+      "level": "MUST",
+      "cluster": "cluster-6-file-process",
+      "name": "Spill Storage Overflow Seam",
+      "description": "ctx.spill{previewBytes/maxTotalBytes/writeFile ref} + spill-policy operate as  post-tool/Bash listener。",
+      "ownerPkg": "pkg/spill",
+      "deps": [
+        "M01"
+      ],
+      "tests": [
+        "tests/spill_recovery_roundtrip_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/spill/spill + spill-local + spill-policy"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.4",
+      "acceptance": [
+        "toolsresult result /Bash result result doc local split distinguish  > threshold value all correctly spill；readrefer usereturn raw inner contain word node consistent"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/spill：SpillLocator(not propagate explicit ) + SpillStore(saveText) + FileSpillStore(private has 0700/session-hash sub target record /with machine pre suffix +danger risk clean ize /wx exclusive occupy ) + Apply spill-policy(over threshold value →head/tail pre view +ref，keep save fail best-effort)；tests/spill_recovery_roundtrip_test.go 4  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M43",
+      "level": "MUST",
+      "cluster": "cluster-4-persistence",
+      "name": "Persistence Seam (Session Persistence) + Flush Checkpoint + Batch Window + Crash Repair",
+      "description": "SessionPersistence{locate/load/inspect/append/list/snapshot} + flush checkpoint + batch window port  + repair orphan child  turn。",
+      "ownerPkg": "pkg/persistence",
+      "deps": [
+        "M01",
+        "M04",
+        "M06",
+        "M30"
+      ],
+      "tests": [
+        "tests/persistence_crash_repair_test.go",
+        "tests/persistence_fork_lineage_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/session/session-persistence + storage/jsonl"
+      ],
+      "status": "completed",
+      "priority": 2,
+      "estimationMd": "0.8",
+      "acceptance": [
+        "append pass process in  kill → reload → repair close close orphan child  turn/end(interrupted)；alreadywrite chunk/tool/call eventsfull part keep retain "
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/persistence：Persistence interface + JSONLBackend(locate/load/append/list/snapshot) + batch window buffer conflict  + FlushCheckpoint + Crash Repair(patch write interrupted turn/end)；tests/persistence_crash_repair_test.go 3  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M44",
+      "level": "MUST",
+      "cluster": "cluster-4-persistence",
+      "name": "SessionHeader Format Rejection & Versioning",
+      "description": "SESSION_FORMAT_VERSION + SessionFormatUnsupportedError + CorruptionError + KNOWN_SESSION_EVENT_TYPES rejectunknownevents。",
+      "ownerPkg": "pkg/session/header.go",
+      "deps": [
+        "M04",
+        "M06",
+        "M43"
+      ],
+      "tests": [
+        "tests/session_format_reject_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/session format version"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.3",
+      "acceptance": [
+        "unknowneventskindtype readinput  fail-closed；not same  VERSION   session doc item mutual mutually reject"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/session/format.go：KNOWN_SESSION_EVENT_TYPES white name single + LoadSession(first validate type then  round-trip) + CorruptEventError + cross-version reject；tests/session_format_reject_test.go 3  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M45",
+      "level": "MUST",
+      "cluster": "cluster-4-persistence",
+      "name": "Storage Domain KV Abstraction (hub -> backend -> domain 3-layer)",
+      "description": "hub → backend(JSONL/SQLite) → domain + CAS version mismatch + typed read/write；MessageFeedback/GoalRevisionViews/SessionSidecars/SkillsCatalog/WorkspaceRegistry shared use。",
+      "ownerPkg": "pkg/storage",
+      "deps": [
+        "M01"
+      ],
+      "tests": [
+        "tests/storage_domain_cas_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/storage-domain"
+      ],
+      "status": "completed",
+      "priority": 2,
+      "estimationMd": "0.6",
+      "acceptance": [
+        "filekv / sqlitekv 2  afterside ，CAS version mismatch errorconsistent；cross afterside migrate move script local can run "
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/storage：Backend interface + filekv/sqlitekv/memorykv 3 afterside  + Domain[T] kindtype ize  CAS readwrite + Migrate cross afterside migrate move (idempotent etc)；tests/storage_domain_cas_test.go 4  cases PASS；refer input  modernc.org/sqlite pure  Go drive dynamic "
+        }
+      ]
+    },
+    {
+      "id": "M46",
+      "level": "MUST",
+      "cluster": "cluster-6-file-process",
+      "name": "Job Lifecycle Owner Binding",
+      "description": "owner Agent bind define  dispose cancel + JobSnapshot{ownerSession}。",
+      "ownerPkg": "pkg/jobs",
+      "deps": [
+        "M01",
+        "M08",
+        "S11"
+      ],
+      "tests": [
+        "tests/job_owner_cancel_on_dispose_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/jobs/jobs owner binding"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.3",
+      "acceptance": [
+        "Agent Dispose → the  owner name down full part  Jobs establish moment walk  cancel hook + orphan child enter process thorough bottom clean manage "
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/jobs：Job lifecycle(owner session bind define ) + Runtime.DisposeOwner(fetch consume name down full part  Jobs + etc finished clean manage complete succeed ) + StartSubprocess(sub enter process tree end stop fallback bottom orphan child clean manage )；with  S11 1 and persist local ，tests/jobs_incremental_output_test.go override"
+        }
+      ]
+    },
+    {
+      "id": "M47",
+      "level": "MUST",
+      "cluster": "cluster-3-safety",
+      "name": "Tool Presentation Neutral Vocabulary (9 Cards)",
+      "description": "ToolCallView/ToolResultView 9 types card（generic/terminal/diff/search/read/web etc）。",
+      "ownerPkg": "pkg/tools/presentation.go",
+      "deps": [
+        "M01",
+        "M48"
+      ],
+      "tests": [
+        "tests/tools_presentation_cards_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/tools/presentation"
+      ],
+      "status": "completed",
+      "priority": 4,
+      "estimationMd": "0.3",
+      "acceptance": [
+        "9 typesinner set card piece place has fieldsandraw edition 1 1 for should ；self define definition toolscan provideself define definition  card kindtype "
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/tools/presentation.go：ToolCallView 3 types(generic/terminal/diff) + ToolResultView 6 types(generic/terminal/diff/search-matches/search-paths/read/web-search/web-fetch) shared  9 expand  card + FileLocation/FileDiff/ReadFileLine/WebSource etcfieldsfor align up cursor  + CardOf determine distinguish (self define definition back persist  other)；tests/tools_presentation_cards_test.go 5  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "M48",
+      "level": "MUST",
+      "cluster": "cluster-3-safety",
+      "name": "DefineTool JSON Schema Strict Validation Subset",
+      "description": "JsonSchemaNode + object root assert + validate + INFER；subagent/workflow result construct ize output out same sample reuse。",
+      "ownerPkg": "pkg/tools/schema.go",
+      "deps": [
+        "M01"
+      ],
+      "tests": [
+        "tests/tools_jsonschema_subset_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/tools DefineTool Schema"
+      ],
+      "status": "completed",
+      "priority": 2,
+      "estimationMd": "0.5",
+      "acceptance": [
+        "oneOf/additionalProperties=false/items/enum/const/default/examples 1:1 andraw edition lang definition consistent；not support  schema close key word  define time report errorand non static default ignore policy "
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/tools/schema.go：JsonSchemaNode strict validation subset + Compile(unknownclose key word  fail-closed) + Validate(kindtype /bound end /oneOf/enum/const/additionalProperties=false) + Infer(Go value anti push  schema) + confirm define property  Marshal；tests/tools_jsonschema_subset_test.go 8  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "S01",
+      "level": "SHOULD",
+      "cluster": "cluster-4-persistence",
+      "name": "Compaction (LLM Summary + Surface Replace)",
+      "description": ">N tokens long for dialogue trigger → yield  LLM pressure shrink old  surface → generate assistant/message{replace range}。",
+      "ownerPkg": "pkg/compaction + pkg/compaction/engine_basic",
+      "deps": [
+        "M07",
+        "M21",
+        "M43"
+      ],
+      "tests": [
+        "tests/compaction_replace_surface_test.go (reused in M21)"
+      ],
+      "upstreamRefs": [
+        "packages/compaction/compaction + compaction-engine-basic"
+      ],
+      "status": "completed",
+      "priority": 5,
+      "estimationMd": "1.0",
+      "acceptance": [
+        "compact afterthen send new consume rest  turn continue proceed walk ；request/header rebuild not need need raw start  events"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/compaction：Summarizer extract object  + BasicEngine(confirm define property extract need ) + Compactor(ShouldCompact token estimate compute /Compact select  range→summarize→generate assistant/message replace swap eventscarry  SurfaceOp replace[old  surface]) source events append-only(readtime replace swap reuse M21) pressure shrink aftercan append add new consume rest (turn proceed navigate ) and FoldAll re build not need raw start is replace swap events；tests/compaction_run_test.go 4 cases(trigger+replace swap +consume rest down fallback /proceed execute /header re build noneraw start events/low threshold value not pressure shrink ) PASS"
+        }
+      ]
+    },
+    {
+      "id": "S02",
+      "level": "SHOULD",
+      "cluster": "cluster-5-subagent",
+      "name": "Subagent Seam (3 Backends)",
+      "description": "in-process fork / ACP child / fork-copy-process 3   Provider。",
+      "ownerPkg": "pkg/subagent + inprocess/subprocess/acp",
+      "deps": [
+        "M01",
+        "M06",
+        "M24",
+        "M25",
+        "M43"
+      ],
+      "tests": [
+        "tests/subagent_fork_inprocess_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/subagent/subagent + providers"
+      ],
+      "status": "completed",
+      "priority": 5,
+      "estimationMd": "1.5",
+      "acceptance": [
+        "3 afterside split distinguish singletest ；parent  dispose sub self dynamic  drain；fork lineage parent/session correctly"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/subagent：Provider extract object (3 afterside ) + ForkLineage(parent/session) + SpawnRequest/Result + Handle(Drain block block etcpersist disk /Dispose level link release release ) + InProcessProvider(same step  runner reuseenter process up down doc ) + inner set  ACP/ForkCopy stub  + Runtime(inject registry table /Spawn/DisposeOwner parent release release level link sub clean manage /ActiveCount) + ErrUnknownProvider；tests/subagent_fork_inprocess_test.go 4 cases(in-process domain spectrum correctly/parent  dispose sub self dynamic  drain/unknownafterside report error/inner set stub can run execute ) PASS"
+        }
+      ]
+    },
+    {
+      "id": "S03",
+      "level": "SHOULD",
+      "cluster": "cluster-4-persistence",
+      "name": "SQLite Persistence Backend + FTS5 Index",
+      "description": "sqlite-session single DB + session eventsexecute ize  + FTS5 + raw sub written。",
+      "ownerPkg": "pkg/persistence/sqlite",
+      "deps": [
+        "M43",
+        "M45"
+      ],
+      "tests": [
+        "tests/persistence_sqlite_fts5_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/storage/sqlite-session"
+      ],
+      "status": "completed",
+      "priority": 5,
+      "estimationMd": "0.8",
+      "acceptance": [
+        "written 10k session events → singlecheck query  <100ms；FTS5 search index standard question /consume rest inner contain command in "
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/persistence/sqlite：Store(modernc sqlite pure  Go) session_events table  JSON BLOB + end side  FTS5 virtual mock table (tokenize='trigram' dual contain  CJK sub serial check index ) + Append/AppendBatch(event service raw sub writecorrect doc +FTS consistent) + Load/Count + Search/Match(FTS MATCH; <3 word or  FTS not can usefallback level  LIKE)；tests/persistence_sqlite_fts5_test.go 4 cases(10k roundtrip/FTS standard question inner contain command in /<100ms perf/empty check query ) PASS"
+        }
+      ]
+    },
+    {
+      "id": "S04",
+      "level": "SHOULD",
+      "cluster": "cluster-4-persistence",
+      "name": "Session Query + Search (SQLite FTS5)",
+      "description": "SessionListRequest/SessionSearchRequest + by title/created + ctrl+f define position 。",
+      "ownerPkg": "pkg/sessionquery",
+      "deps": [
+        "S03",
+        "S08"
+      ],
+      "tests": [
+        "tests/session_query_title_content_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/storage/session-query"
+      ],
+      "status": "completed",
+      "priority": 6,
+      "estimationMd": "0.3",
+      "acceptance": [
+        "bystandard question pre suffix /createtime space standard scope /package includingclose key word 3 meta pass filter result result standard confirm "
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/sessionquery：QueryService(ListSummaries standard question pre suffix +createtime space standard scope +Limit 3 meta pass filter , by UpdatedAt reverse order ; Search reuse S03 FTS5 inner contain command in ∪standard question includingword ; extract need including title(latest-wins fold, lack save back exit head  useuser consume rest pre suffix )/createdAt/updatedAt/eventCount) + S03 patch  ListSessions; tests/session_query_title_content_test.go 3 cases(3 meta pass filter /Limit reverse order /FTS inner contain andstandard question search index /empty close key word ) PASS"
+        }
+      ]
+    },
+    {
+      "id": "S05",
+      "level": "SHOULD",
+      "cluster": "cluster-4-persistence",
+      "name": "Session Telemetry Hooks",
+      "description": "sessionTelemetry{event/chunk/tool latency}。",
+      "ownerPkg": "pkg/telemetry/session_telemetry.go",
+      "deps": [
+        "M04"
+      ],
+      "tests": [
+        "tests/session_telemetry_hooks_fired_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/runtime-diagnostics/session-telemetry"
+      ],
+      "status": "completed",
+      "priority": 6,
+      "estimationMd": "0.3",
+      "acceptance": [
+        "append events/send send  chunk/execute tool 3 kindhook sub all trigger；latency incombine manage zone space "
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/telemetry/session_telemetry.go：SessionTelemetry back call inject registry table (Event/Chunk/Tool 3 hook sub , thread process safe full  RWMutex) + RecordEvent/RecordChunk/RecordTool(self dynamic compute  latency ms + can control time clock inject) + callSafe recover isolatesinglehook sub  panic；tests/session_telemetry_hooks_fired_test.go 5 cases(3 kindtrigger+latency zone space /tool ok standard record /panic isolate/empty collection /and send ) PASS"
+        }
+      ]
+    },
+    {
+      "id": "S06",
+      "level": "SHOULD",
+      "cluster": "cluster-7-config",
+      "name": "Authorization Service (OAuth Flow Stub)",
+      "description": "credentials   flow part split ；stub capability list out /open start /fetch consume immediate can ，produce produce connect input browse view device or  SDK back call 。",
+      "ownerPkg": "pkg/credentials/authorization.go",
+      "deps": [
+        "M39"
+      ],
+      "tests": [
+        "tests/authorization_flow_stub_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/credentials/authorization"
+      ],
+      "status": "completed",
+      "priority": 6,
+      "estimationMd": "0.4",
+      "acceptance": [
+        "list flows → begin → triggerback call  → resolved credential down timesrequest seek can is  M39 resolve to "
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/credentials/authorization.go：AuthService encode queue  begin→back call →resolved credential(1 timesproperty  token; Complete written store.Set → M39 Resolve can to ; status pending/completed/cancelled; re reuse complete succeed /fetch consume reject; list/status); reuse M39 Flow inject registry raw lang ; tests/authorization_flow_stub_test.go 4 cases(list-begin-complete-resolve/cancel/dual complete succeed reject/unknown token) PASS"
+        }
+      ]
+    },
+    {
+      "id": "S07",
+      "level": "SHOULD",
+      "cluster": "cluster-4-persistence",
+      "name": "OTel Telemetry Export (trace/metric/log)",
+      "description": "OTLP exporter + resource detector + baggage；and S05 hook for connect 。",
+      "ownerPkg": "pkg/telemetry/otel.go",
+      "deps": [
+        "S05"
+      ],
+      "tests": [
+        "tests/otel_collector_integration_test.go (optional)"
+      ],
+      "upstreamRefs": [
+        "packages/runtime-diagnostics/telemetry-otel"
+      ],
+      "status": "completed",
+      "priority": 6,
+      "estimationMd": "0.5",
+      "acceptance": [
+        "local local  OTel Collector capability collect to  span including session id + turn id + step id baggage"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/telemetry/otel.go：Exporter extract object (for connect  OTLP network close ) + InMemoryExporter(test/local local collect collection ) + Span{Baggage: session/turn/step 3  id} + BaggageProvider + OTelBridge(Attach connect input  S05 3 kindhook sub  → each timesembed point  emit carry  baggage span, Kind=event/chunk/tool, attrs=latency/seq/len/ok)；nonenumber 3 method depend depend can control ；tests/otel_bridge_spans_test.go 3 cases(3  span carry 3  id baggage/tools span name aftersuffix /none baggage provider not  panic) PASS"
+        }
+      ]
+    },
+    {
+      "id": "S08",
+      "level": "SHOULD",
+      "cluster": "cluster-4-persistence",
+      "name": "Session Title (session/title + LLM helper + fallback)",
+      "description": "latest-wins fold + fallback human msg prefix 30 word  + LLM auxiliary assist generate。",
+      "ownerPkg": "pkg/sessiontitle",
+      "deps": [
+        "M04",
+        "M05",
+        "M07"
+      ],
+      "tests": [
+        "tests/session_title_fallback_llm_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/storage/session-title"
+      ],
+      "status": "completed",
+      "priority": 6,
+      "estimationMd": "0.3",
+      "acceptance": [
+        "LLM helper notstart use fallback 30 word has effect ；start useaftergenerate standard question written session/title"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/sessiontitle：Fallback(head   user consume rest  rune pre suffix  30 word truncate+multiword node safe full ) + Generator{LLMAdapter can select } Generate→{Title,Source:llm/fallback}(low warm adopt sample +clean manage assemble decorate token number )；latest-wins fold reuse M05 FoldSessionTitle；tests/session_title_fallback_llm_test.go 8 cases(pre suffix truncate/none LLM/LLM produce out /LLM failback exit /LLM empty output out back exit /fold) PASS"
+        }
+      ]
+    },
+    {
+      "id": "S09",
+      "level": "SHOULD",
+      "cluster": "cluster-3-safety",
+      "name": "Message Feedback (Storage Domain Sidecar + Stable Fail Taxonomy)",
+      "description": "rating/note/version(CAS)/createdAt/updatedAt + fail taxonomy + list/put/delete。",
+      "ownerPkg": "pkg/feedback",
+      "deps": [
+        "M01",
+        "M04",
+        "M45"
+      ],
+      "tests": [
+        "tests/feedback_cas_failure_taxonomy_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/feedback/feedback"
+      ],
+      "status": "completed",
+      "priority": 6,
+      "estimationMd": "0.4",
+      "acceptance": [
+        "CAS conflict conflict returnclassifyerror VERSION_CONFLICT；not save in session report  SESSION_NOT_FOUND"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/feedback：Feedback{rating/note/Version(CAS)/CreatedAt/UpdatedAt} + Store{Put/Get/Delete/List} + FailCode{VERSION_CONFLICT/SESSION_NOT_FOUND/NOT_FOUND} stable define classify；base at  storage.Domain CAS；tests/feedback_cas_failure_taxonomy_test.go(CAS conflict conflict /classify/session dialogue level operate operate ) PASS"
+        }
+      ]
+    },
+    {
+      "id": "S10",
+      "level": "SHOULD",
+      "cluster": "cluster-5-subagent",
+      "name": "Terminal PTY (Persistent Terminal Session)",
+      "description": "TerminalBackend/Session + spawn/send/read/signal/close + bounded scrollback + waitReason + single agent exclusive occupy active dynamic 。",
+      "ownerPkg": "pkg/terminal",
+      "deps": [
+        "M01",
+        "M08",
+        "M36"
+      ],
+      "tests": [
+        "tests/terminal_pty_interactive_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/shell/terminal"
+      ],
+      "status": "completed",
+      "priority": 6,
+      "estimationMd": "0.8",
+      "acceptance": [
+        "spawn bash → send 'echo hello' → read 'hello' return；close → pty enter process exit out code  0"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/terminal：TerminalBackend(single agent exclusive occupy active active session dialogue ) + Session(spawn→stdin/stdout manage channel  + has boundary back scroll  + Wait(reason=exited/signalled/closed/error) + Send/SendLine/Read/ReadString/Contains/Signal/Close) + ShellCommand(runtime.GOOS generate cmd/sh script local )；tests/terminal_pty_interactive_test.go 4 cases(spawn→read→wait-exited/has boundary back scroll truncate/exclusive occupy active dynamic reject/cross mutual  send→read→close) cross level platform  PASS"
+        }
+      ]
+    },
+    {
+      "id": "S11",
+      "level": "SHOULD",
+      "cluster": "cluster-6-file-process",
+      "name": "Jobs Runtime (Background Task View)",
+      "description": "JobStart/Hooks/Snapshot + read/waitForDone/cancel/listByOwner。",
+      "ownerPkg": "pkg/jobs",
+      "deps": [
+        "M01",
+        "M46",
+        "M36"
+      ],
+      "tests": [
+        "tests/jobs_incremental_output_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/jobs/jobs"
+      ],
+      "status": "completed",
+      "priority": 5,
+      "estimationMd": "0.5",
+      "acceptance": [
+        "bash('for i in 1..10; do echo $i; sleep 0.1; done', timeout=60) → Jobs incremental read each  100ms readto down 1  count word ；Job can  cancel"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/jobs：JobStart/Runtime/JobHooks(cancel/done/readOutput) + JobSnapshot{ownerSession} + Runtime.Start/ListByOwner/All/DisposeOwner + StartSubprocess(base at  pkg/subprocess incrementaloutput out )；tests/jobs_incremental_output_test.go incrementaloutput out (ListByOwner/DisposeCancel/DisposeSubprocessCleanup) PASS"
+        }
+      ]
+    },
+    {
+      "id": "S12",
+      "level": "SHOULD",
+      "cluster": "cluster-5-subagent",
+      "name": "Workflow Engine + tool-workflow",
+      "description": "Worker thread engine + script local full local (pipeline/parallel/agent/phase) + Chat Durable Records fold invariant。",
+      "ownerPkg": "pkg/workflow",
+      "deps": [
+        "S02",
+        "M25",
+        "M48"
+      ],
+      "tests": [
+        "tests/workflow_parallel_subagents_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/workflow/workflow + tool-workflow"
+      ],
+      "status": "completed",
+      "priority": 6,
+      "estimationMd": "1.2",
+      "acceptance": [
+        "parallel 3 subagents all run  2 step  → aggregate total result result correctly；workflow cancel sub  agent level link  cancel"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/workflow：Workflow{Name/Mode pipeline|parallel/Steps} + script local full local raw lang  Pipeline/Parallel/Agent(name,backend,input,spawn connect  S02)/Seq(sub work operate stream succeed step ) + Step{Name,Run} + Result{Outputs,Cancelled} + Run(serializedshort route /and execute  goroutine aggregate total keep order /ctx fetch consume level link  Cancelled)；tests/workflow_parallel_subagents_test.go 3 cases(and execute  3 sub era manage each  2 step aggregate total  6 result result /serializedshort route fetch consume tail part step step /cancel level link  Cancelled) PASS"
+        }
+      ]
+    },
+    {
+      "id": "S13",
+      "level": "SHOULD",
+      "cluster": "cluster-5-subagent",
+      "name": "MCP Client (SSE/stdio Transport -> ToolDefinition Bridge)",
+      "description": "MCPTransport + MCPClient + list tools + call tool → self dynamic reflect map  ToolDefinition。",
+      "ownerPkg": "pkg/mcp",
+      "deps": [
+        "M01",
+        "M23",
+        "M48"
+      ],
+      "tests": [
+        "tests/mcp_client_tool_bridge_test.go"
+      ],
+      "upstreamRefs": [
+        " (native MCP protocol spec)"
+      ],
+      "status": "completed",
+      "priority": 7,
+      "estimationMd": "1.0",
+      "acceptance": [
+        "connectionto show example  MCP server（such as  filesystem-server）aftertoolsself dynamic out now in ToolRegistry and capability correct normal call"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/mcp：Transport(JSON-RPC to return extract object ) + Client(Initialize/tools-list/tools-call, sessionId) + Bridge(ToTool/ToTools hold  MCP schema reflect map as  pkg/tools.Tool, Execute package assemble  CallTool) + MapSchema(M48 strict validation subsetreflect map  properties/required/items/enum/default, not supportclose key word  anyOf etc fail-closed)；tests/mcp_client_tool_bridge_test.go(mock JSON-RPC server) 4 cases(list toolsself dynamic inject registry +correct normal call/isError report error/fail-closed/schema reflect map ) PASS"
+        }
+      ]
+    },
+    {
+      "id": "S14",
+      "level": "SHOULD",
+      "cluster": "cluster-5-subagent",
+      "name": "Workspace Registry (Directory + Session Grouping + Resume)",
+      "description": "workspace record{id/root/sessionGroup/resume-on-open} + ctx.workspaces。",
+      "ownerPkg": "pkg/workspace",
+      "deps": [
+        "M01",
+        "M45"
+      ],
+      "tests": [
+        "tests/workspace_group_session_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/workspace"
+      ],
+      "status": "completed",
+      "priority": 7,
+      "estimationMd": "0.3",
+      "acceptance": [
+        "mutually same  root route path create2 times workspace returnsame 1  id；resume-on-open recordthe  workspace default acknowledge hit open which   session"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/workspace：Registry(mount load  storage.Domain memorykv, prefix workspace/) Create(rule standard ize  root + sha256 confirm define property  id → mutually same  root idempotent etcreuse) + Get/List(word classic order ) + SetSessionGroup/SetResumeOnOpen/ClearResumeOnOpen(CAS update)；tests/workspace_group_session_test.go 6 cases(idempotent etc/diff  root diff  id/resume recordclean eliminate /split group /List/empty  root reject) PASS"
+        }
+      ]
+    },
+    {
+      "id": "S15",
+      "level": "SHOULD",
+      "cluster": "cluster-5-subagent",
+      "name": "LLM Retry (llm/retry event + exponential backoff + jitter)",
+      "description": "exponential backoff + max attempts + jitter + write llm/retry event(attempt/backoffMs/error)。",
+      "ownerPkg": "pkg/llm/retry.go",
+      "deps": [
+        "M01",
+        "M04",
+        "M07"
+      ],
+      "tests": [
+        "tests/llm_retry_backoff_event_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/llm/llm retry middleware"
+      ],
+      "status": "completed",
+      "priority": 5,
+      "estimationMd": "0.4",
+      "acceptance": [
+        "mock 3 times overload → write 3   llm/retry event；number  4 timessucceed；over pass  max forward  request-error waterfall"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/llm/retry.go：RetryMiddleware(point count exit avoid  + jitter + only  overload/rate-limit can retry + each timeswrite llm/retry events(attempt/backoffMs/error) + reach  max up throw )；tests/llm_retry_backoff_event_test.go 3  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "S16",
+      "level": "SHOULD",
+      "cluster": "cluster-5-subagent",
+      "name": "Output Retention (Tool Result Canonical Value Preserved to Committed)",
+      "description": "post-execute afterstill keep retain  canonical value；concurrent reader keep protect 。",
+      "ownerPkg": "pkg/tools/execution.go",
+      "deps": [
+        "M23"
+      ],
+      "tests": [
+        "tests/output_retention_concurrent_read_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/tools output retention gate"
+      ],
+      "status": "completed",
+      "priority": 6,
+      "estimationMd": "0.2",
+      "acceptance": [
+        "and send 2   reader readsame 1  large toolsresult result （10MB）all returncompleteword node cut piece not lack lose "
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/tools/retention.go：ResultRetention(RWMutex and send safe full , Retain not can change sub local  + Read returnexclusive establish sub local  + Remove logic logic delete eliminate  + Len) + Canonicalize([]byte/string/JSON) + RetainResult(ToolCallResult); tests/output_retention_concurrent_read_test.go 4 cases(10MB and send  reader complete/RetainResult JSON/string/lack lose andlogic logic delete eliminate ) PASS"
+        }
+      ]
+    },
+    {
+      "id": "C01",
+      "level": "COULD",
+      "cluster": "extensions",
+      "name": "web_fetch Tool Custom Integration",
+      "description": "service service side operate as toolsconnect input 。",
+      "ownerPkg": "User business code",
+      "deps": [
+        "M23"
+      ],
+      "tests": [],
+      "upstreamRefs": [
+        "packages/web/web + tool-web"
+      ],
+      "status": "deferred",
+      "priority": 8,
+      "estimationMd": "0.2",
+      "acceptance": [
+        "service service side can by ToolDefinition rule standard connect input any intent  HTTP tools。"
+      ],
+      "history": []
+    },
+    {
+      "id": "C02",
+      "level": "COULD",
+      "cluster": "extensions",
+      "name": "Web Capability Seam (ctx.web)",
+      "description": "provide  C01 toolsreuse browse view device /HTTP extract object layer 。",
+      "ownerPkg": "pkg/web (COULD reserved)",
+      "deps": [
+        "C01"
+      ],
+      "tests": [],
+      "upstreamRefs": [
+        "packages/web/web"
+      ],
+      "status": "deferred",
+      "priority": 9,
+      "estimationMd": "0.5",
+      "acceptance": [],
+      "history": []
+    },
+    {
+      "id": "C03",
+      "level": "COULD",
+      "cluster": "extensions",
+      "name": "Webhook Runtime",
+      "description": "eventscall degree andsession dialogue create；service service side can self execute use Gin/gRPC。",
+      "ownerPkg": "User business code",
+      "deps": [
+        "M43"
+      ],
+      "tests": [],
+      "upstreamRefs": [
+        "packages/webhook"
+      ],
+      "status": "deferred",
+      "priority": 9,
+      "estimationMd": "0.5",
+      "acceptance": [],
+      "history": []
+    },
+    {
+      "id": "C04",
+      "level": "COULD",
+      "cluster": "extensions",
+      "name": "LSP Language Server Integration",
+      "description": "lang definition jump forward /re command name /refer use；first use grep+AST toolsenough 。",
+      "ownerPkg": "pkg/lsp (COULD reserved)",
+      "deps": [
+        "M36"
+      ],
+      "tests": [],
+      "upstreamRefs": [
+        "packages/lsp/lsp-client"
+      ],
+      "status": "deferred",
+      "priority": 10,
+      "estimationMd": "1.5",
+      "acceptance": [],
+      "history": []
+    },
+    {
+      "id": "C05",
+      "level": "COULD",
+      "cluster": "extensions",
+      "name": "Typert CLI Framework",
+      "description": "nonehead afterside use use Gin/gRPC immediate can 。",
+      "ownerPkg": "User business code",
+      "deps": [],
+      "tests": [],
+      "upstreamRefs": [
+        "packages/util/typert"
+      ],
+      "status": "skipped",
+      "priority": 10,
+      "estimationMd": "0.0",
+      "acceptance": [],
+      "history": []
+    },
+    {
+      "id": "C06",
+      "level": "COULD",
+      "cluster": "extensions",
+      "name": "Schedule Session-level Cron Reminder",
+      "description": "service service layer alreadyhas define time any service system system 。",
+      "ownerPkg": "User business code",
+      "deps": [
+        "M08"
+      ],
+      "tests": [],
+      "upstreamRefs": [
+        "packages/schedule/schedule"
+      ],
+      "status": "deferred",
+      "priority": 10,
+      "estimationMd": "0.5",
+      "acceptance": [],
+      "history": []
+    },
+    {
+      "id": "C07",
+      "level": "COULD",
+      "cluster": "extensions",
+      "name": "Agent Teams Experimental Features",
+      "description": "roster/mailbox/task DAG；Subagent can useafterbysame modeadd 。",
+      "ownerPkg": "pkg/team (COULD reserved)",
+      "deps": [
+        "S02",
+        "M45"
+      ],
+      "tests": [],
+      "upstreamRefs": [
+        "packages/team/agent-team"
+      ],
+      "status": "deferred",
+      "priority": 11,
+      "estimationMd": "1.5",
+      "acceptance": [],
+      "history": []
+    },
+    {
+      "id": "C08",
+      "level": "COULD",
+      "cluster": "ui-skip",
+      "name": "Slots UI Composition System",
+      "description": "UI mutually close ，nonehead afterside jump pass 。",
+      "ownerPkg": "",
+      "deps": [],
+      "tests": [],
+      "upstreamRefs": [
+        "packages/core/slots"
+      ],
+      "status": "skipped",
+      "priority": 99,
+      "estimationMd": "0.0",
+      "acceptance": [],
+      "history": []
+    },
+    {
+      "id": "C09",
+      "level": "COULD",
+      "cluster": "extensions",
+      "name": "Extensions / Dynamic Cordis Plugins",
+      "description": "v2.0 use Go Plugin interface + group combine inject registry replace era 。",
+      "ownerPkg": "internal/cordislike + pkg harnessctx plugin builder",
+      "deps": [],
+      "tests": [],
+      "upstreamRefs": [
+        "packages/core/extensions"
+      ],
+      "status": "deferred",
+      "priority": 11,
+      "estimationMd": "1.0",
+      "acceptance": [],
+      "history": []
+    },
+    {
+      "id": "C10",
+      "level": "COULD",
+      "cluster": "extensions",
+      "name": "Code Runtime (PTC) Worker Threads",
+      "description": "PTC model type side supportafteradd 。",
+      "ownerPkg": "pkg/coderuntime (COULD reserved)",
+      "deps": [
+        "M36",
+        "S02"
+      ],
+      "tests": [],
+      "upstreamRefs": [
+        "packages/runtime/code-runtime"
+      ],
+      "status": "deferred",
+      "priority": 12,
+      "estimationMd": "1.2",
+      "acceptance": [],
+      "history": []
+    },
+    {
+      "id": "C11",
+      "level": "COULD",
+      "cluster": "ui-skip",
+      "name": "Conversation Node Engine",
+      "description": "UI fold stack ；serve service side not Implemented。",
+      "ownerPkg": "",
+      "deps": [],
+      "tests": [],
+      "upstreamRefs": [
+        "packages/client/conversation"
+      ],
+      "status": "skipped",
+      "priority": 99,
+      "estimationMd": "0.0",
+      "acceptance": [],
+      "history": []
+    },
+    {
+      "id": "C12",
+      "level": "COULD",
+      "cluster": "ui-skip",
+      "name": "Client Modules / Web Client / Remote API",
+      "description": "UI and far process  API。",
+      "ownerPkg": "",
+      "deps": [],
+      "tests": [],
+      "upstreamRefs": [
+        "packages/client/*"
+      ],
+      "status": "skipped",
+      "priority": 99,
+      "estimationMd": "0.0",
+      "acceptance": [],
+      "history": []
+    },
+    {
+      "id": "C13",
+      "level": "COULD",
+      "cluster": "extensions",
+      "name": "Web Server + HTTP API",
+      "description": "service service side use Gin/gRPC break expose immediate can 。",
+      "ownerPkg": "cmd/dshd (optional)",
+      "deps": [],
+      "tests": [],
+      "upstreamRefs": [
+        "packages/web-server"
+      ],
+      "status": "deferred",
+      "priority": 9,
+      "estimationMd": "0.8",
+      "acceptance": [],
+      "history": []
+    },
+    {
+      "id": "C14",
+      "level": "COULD",
+      "cluster": "ui-skip",
+      "name": "Approval UI / Settings Panel / Command Palette",
+      "description": "UI。",
+      "ownerPkg": "",
+      "deps": [],
+      "tests": [],
+      "upstreamRefs": [
+        "UI package"
+      ],
+      "status": "skipped",
+      "priority": 99,
+      "estimationMd": "0.0",
+      "acceptance": [],
+      "history": []
+    },
+    {
+      "id": "C15",
+      "level": "COULD",
+      "cluster": "extensions",
+      "name": "Attachment Consumer (Image Resize / OCR)",
+      "description": "multimodel state expand expand 。",
+      "ownerPkg": "pkg/attachment OCR/Resize consumer",
+      "deps": [
+        "M29"
+      ],
+      "tests": [],
+      "upstreamRefs": [
+        "packages/core/attachment consumer"
+      ],
+      "status": "deferred",
+      "priority": 11,
+      "estimationMd": "0.6",
+      "acceptance": [],
+      "history": []
+    },
+    {
+      "id": "C16",
+      "level": "COULD",
+      "cluster": "extensions",
+      "name": "Sandbox Landlock/Bwrap Platform Enforcement",
+      "description": "Linux/macOS dedicated use；level platform  Provider。",
+      "ownerPkg": "pkg/sandbox/landlock(+bwrap) reserved",
+      "deps": [
+        "M26"
+      ],
+      "tests": [],
+      "upstreamRefs": [
+        "packages/sandbox/sandbox-local"
+      ],
+      "status": "deferred",
+      "priority": 15,
+      "estimationMd": "1.5",
+      "acceptance": [],
+      "history": []
+    },
+    {
+      "id": "C17",
+      "level": "COULD",
+      "cluster": "ui-skip",
+      "name": "Session Control Frame (Realtime Web Push)",
+      "description": "serve service side use stream/channel replace era 。",
+      "ownerPkg": "SDK stream wrapper",
+      "deps": [],
+      "tests": [],
+      "upstreamRefs": [
+        "packages/client control-frame"
+      ],
+      "status": "skipped",
+      "priority": 99,
+      "estimationMd": "0.0",
+      "acceptance": [],
+      "history": []
+    },
+    {
+      "id": "N01",
+      "level": "MUST",
+      "cluster": "cluster-8-cache-affinity",
+      "name": "DeepSeek Prefix Cache Instrumentation Probes",
+      "description": "stage 0 pre set base foundation setting apply 。TokenUsage fieldspatch full (PromptCacheHitTokens + PromptCacheMissTokens)+ CacheStats result construct  + ComputeHitRatio() guard  0/0 NaN + DeepSeek client user side  SSE affect should parse + Token Meter increase strong 。each times LLM request seek self dynamic adopt collection cachehit rate，operate as stage 1-7 full part verify collect  count data base thread 。",
+      "ownerPkg": "pkg/llm + pkg/llm/provider_deepseek + pkg/llm/tokenmeter.go",
+      "deps": [
+        "M07",
+        "M34"
+      ],
+      "tests": [
+        "tests/cache_probe_unit_test.go",
+        "tests/cache_probe_deepseek_client_test.go"
+      ],
+      "upstreamRefs": [
+        "(local derivative - DeepSeek API docs)"
+      ],
+      "status": "completed",
+      "priority": 0,
+      "estimationMd": "1.0",
+      "acceptance": [
+        "TokenUsage new increase  PromptCacheHitTokens + PromptCacheMissTokens fields",
+        "CacheStats.ComputeHitRatio() in 0/correct normal /full command in 3 typesfield scene down correctly（guard  NaN）",
+        "DeepSeek Client parseUsage() correctlyparse SSE affect should in   prompt_cache_hit_tokens / prompt_cache_miss_tokens fields",
+        "each times LLM request seek day log execute package including cache.hit_ratio=... fields",
+        "Mock E2E: tests/cache_probe_deepseek_client_test.go use mock SSE affect should verify verify  parseUsage correctly"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/llm/cache.go：CacheStats{Add/Total/RecordUsage} + ComputeHitRatio()(guard  0/0 NaN, 0/correct normal /full command in /full notcommand in confirm define value ) + HitRatioOf + CacheLogLine(cache.hit_ratio=)；Usage alreadyhas cachefields + DeepSeek parseUsage alreadyparse SSE cachefields；tests/cache_probe_unit_test.go 5 + cache_probe_deepseek_client_test.go 1 cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "N02",
+      "level": "MUST",
+      "cluster": "cluster-8-cache-affinity",
+      "name": "D1 Strict Append-only Fold + SurfaceOp Hardening",
+      "description": "stage 1 discipline D1。Session only break expose  Append() 1  writeroute path （encode translate phase rejectany what  in-place fix modify ）+ SurfaceOp table surface replace swap mechanism（compaction unique 1 combine method writehistory history method mode ，readtime replace swap not fix modify source events）+ 8  invariant day-1 validate（seq continuous / time singlecall  / turn/step/tool_call pair for  / goal revision CAS / persistence format consistent）。this is  dsh-go not break bad  prefix cache  root local ensure。",
+      "ownerPkg": "pkg/session + pkg/session/surface.go + pkg/session/invariant.go",
+      "deps": [
+        "M04",
+        "M05",
+        "M21",
+        "M30",
+        "M33"
+      ],
+      "tests": [
+        "tests/session_append_only_test.go",
+        "tests/session_surface_replace_purity_test.go",
+        "tests/session_invariant_8_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/session + packages/core/compaction"
+      ],
+      "status": "completed",
+      "priority": 0,
+      "estimationMd": "1.5",
+      "acceptance": [
+        "eliminate  Append() outer  Session none has any what  public/private writemethod method （encode translate phase reject）",
+        "SurfaceOp{op:replace, start, end, data} fieldsImplemented，deriveMessages() readto  surfaceOp time do readtime replace swap ，source eventsnot fix modify ",
+        "8  invariant day-1: seq_continuous + time_monotonic + turn_start_end_paired + step_start_end_paired + approval_asked_decided_paired + goal_revision_cas + tool_call_result_paired + persistence_format_consistent",
+        "any what 1   invariant fail：throw  InvariantError + reject append + register record  invariant ledger",
+        "human as injectanti example （seq jump number 、time back exit 、turn not pair for ）mustis  invariant catch get ",
+        "50 round correct normal for dialogue after session doc item  seq strict format  1..N continuous + time strict format singlecall "
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/session/invariants.go：AppendOnly contract bound guard guard  + VerifyInvariants 8   day-1 invariant(seq_continuous/time_monotonic/turn/step/approval/goal CAS/tool_call/format) + reuseat  M04/M05/M21/M30 existing has capability force ；tests/session_invariant_8_test.go 7  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "N03",
+      "level": "MUST",
+      "cluster": "cluster-8-cache-affinity",
+      "name": "D2 System Prompt Template Copy + Static Order + Static Check",
+      "description": "stage 2 discipline D2。pkg/sysprompt/sections/*.go strict format copy budget  dsh raw edition  section doc local （1 word not diff ，package include standard point /swap execute /shrink enter ）+ Section.Order() read const fieldshardcodedorder（persona:100 / policy:200 / runtime_ctx:300 / plan_policy:500 / skill_catalog:600）+ static check：forbid insert dynamic state value （time.Now() / os.Getwd() / math/rand / os.Getenv DSH_*）+ run execute time  Recorder check test  Section.Render() inner  non method call + CI must run  check-cache-safety.sh。",
+      "ownerPkg": "pkg/sysprompt + pkg/sysprompt/static_check.go + scripts/check-cache-safety.sh",
+      "deps": [
+        "M09"
+      ],
+      "tests": [
+        "tests/sysprompt_section_strict_copy_test.go",
+        "tests/sysprompt_static_check_test.go",
+        "tests/sysprompt_no_dynamic_value_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/system-prompt/src/sections/*.ts"
+      ],
+      "status": "completed",
+      "priority": 0,
+      "estimationMd": "1.5",
+      "acceptance": [
+        "place has  section doc local and dsh raw edition  package/core/system-prompt/src/sections/*.ts strict format  diff consistent（0 differences）",
+        "Section.Order() read const fields（such as  PersonaSectionOrder = 100），run execute time not capability is override",
+        "make check-cache-safety.sh via：grep scan pkg/sysprompt/sections/ 0 violations",
+        "each   Section.Render() run  1000 timesoutput out step-by-step word node mutually same （verify explicit pure function count ）",
+        "50 round for dialogue after logger record  system_prompt_hash cross round complete full mutually same "
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/sysprompt/static_check.go：bannedPatterns anti-patternstatic check(time.Now/os.Getwd/rand/dynamic state  env/fmt.Sprintf) + StaticCheck/CheckSections + SystemHash/AssembleHash(pure function count verify explicit ) + IsPure；Section order readnormal volume fields；tests/sysprompt_static_check_test.go 5  cases PASS（1000 timesrender taint step-by-step word node +hash wish stable define ）"
+        }
+      ]
+    },
+    {
+      "id": "N04",
+      "level": "MUST",
+      "cluster": "cluster-8-cache-affinity",
+      "name": "D3 Skills Catalog Stable Serialization + Change-only Injection",
+      "description": "stage 3 discipline D3。SkillRegistry.CatalogText() by skill name word classic order stable define output out （nonewith machine  / nonetime space stamp  / fieldsordersolid define ）+ MaybeInjectCatalog() hash diff change-only inject（hash change ize time via agent.inject() writeas new  user-message，**not fix modify ** system prefix）+ fsnotify real time refresh new （monitor listen  6 layer target record ，Windows polling fallback）。",
+      "ownerPkg": "pkg/skill + pkg/skill/tool.go + pkg/skill/provider_fs.go",
+      "deps": [
+        "M40"
+      ],
+      "tests": [
+        "tests/skill_catalog_stable_serialize_test.go",
+        "tests/skill_change_only_inject_test.go",
+        "tests/skill_fsnotify_invalidates_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/skills + packages/core/agent inject()"
+      ],
+      "status": "completed",
+      "priority": 0,
+      "estimationMd": "1.0",
+      "acceptance": [
+        "CatalogText() cross  1000 timescallstep-by-step word node mutually same （nonewith machine 、nonetime space stamp ）",
+        "add add /delete eliminate 1   skill → next call CatalogText() hash change ize  → inject trigger",
+        "fsnotify mock trigger → 5   skill increase delete modify  → inject timescount correctly",
+        "50 round for dialogue in  skills not change time  <available_skills> zone block only inject 1 times（head times）",
+        "SkillRegistry cross enter process order list ize result result consistent（same 1  catalog hash consistent）"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "expand expand  pkg/skills：CatalogText(<available_skills> word classic order stable define , nonetime space stamp ) + CatalogHash(sha256) + Injector(MaybeInject change-only: only in hash change ize inject, 50 round not change only inject 1 times)；tests/skill_catalog_change_only_test.go 3  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "N05",
+      "level": "MUST",
+      "cluster": "cluster-8-cache-affinity",
+      "name": "D4 PromptContext Change-only Injection + Compaction Retains Snapshot",
+      "description": "stage 4 discipline D4。pkg/sysprompt/context.go PromptContext inject registry table （and PromptSection and execute inject registry ，zone distinguish ：Section → system prompt pre suffix static state ，Context → user-msg append add inend tail dynamic state ）+ change-only hash persistence（hash not change not inject）+ GoalRoundContext proceed round submit show （goal.active time proceed round submit show walk  user-msg and non  system prompt）+ Compaction strong control keep retain most after context snapshot（BasicEngine.SelectCompactionRange keep retain  lastContextSeq of afterplace has inner contain ）。",
+      "ownerPkg": "pkg/sysprompt/context.go + pkg/goal/round_driver.go + pkg/compaction/engine.go",
+      "deps": [
+        "M09",
+        "M10",
+        "M12",
+        "M21"
+      ],
+      "tests": [
+        "tests/prompt_context_change_only_test.go",
+        "tests/goal_round_context_test.go",
+        "tests/compaction_preserve_context_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/system-prompt/context-prompt + packages/core/goal + packages/core/compaction"
+      ],
+      "status": "completed",
+      "priority": 0,
+      "estimationMd": "1.5",
+      "acceptance": [
+        "RuntimeContext.Compute() in session statuschange ize time  hash change ize ，nonechange ize time  hash stable define ",
+        "GoalRoundContext in goal.complete afterself dynamic stop stop inject",
+        "compaction aftermost after1 times context snapshot still can in derived messages in find to ",
+        "Plan mode switch / goal setting set  / approval policy change update all walk  user-msg append add ，not fix modify  system prompt",
+        "50 round for dialogue  + 1 times plan mode switch + 1 times goal setting set  → hit ratestill  ≥ 95%"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "expand expand  pkg/sysprompt/context_injector.go：ChangeOnlyInjector(persistence lastHash recover reuse , hash change only inject user-msg, not modify  system prompt) + CompactPreserve(compaction keep retain most new  snapshot)；reuseat  M10 ContextRegistry and GoalRoundContext；tests/prompt_context_change_only_test.go 5  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "N06",
+      "level": "MUST",
+      "cluster": "cluster-8-cache-affinity",
+      "name": "4 Anti-pattern Defenses + Custom Lint Tool",
+      "description": "stage 5 guard defend layer 。anti-pattern 1: dynamic state time space stamp write system prompt → static_check.go + run execute time  Recorder。anti-pattern 2: compaction back writehistory history  → Session only break expose  Append()（encode translate phase reject）。anti-pattern 3: JSON Schema fieldsorderwith machine  → compileToJSONSchema define order output out （properties / required / enum full part word classic order ）。anti-pattern 4: <available_skills> orderwith machine  → CatalogText word classic order  + ToolRegistry List() word classic order 。internal/lint/cache_safety.go self define definition  go vet analyzer + scripts/check-cache-safety.sh static state scanscript local  + Makefile collection succeed to  CI。",
+      "ownerPkg": "pkg/sysprompt/static_check.go + pkg/tools/schema.go + pkg/tools/registry.go + internal/lint/cache_safety.go + scripts/check-cache-safety.sh",
+      "deps": [
+        "N01",
+        "N02",
+        "N03",
+        "N04",
+        "M09",
+        "M48",
+        "M40"
+      ],
+      "tests": [
+        "tests/cache_safety_lint_test.go",
+        "tests/tools_schema_deterministic_order_test.go",
+        "tests/tools_registry_sorted_list_test.go"
+      ],
+      "upstreamRefs": [
+        "(local derivative - based on static_check + go vet)"
+      ],
+      "status": "completed",
+      "priority": 0,
+      "estimationMd": "1.0",
+      "acceptance": [
+        "internal/lint/cache_safety.go provide 4 kindanti-pattern  AST scan（time.Now/os.Getwd/rand/json.Marshal(map)）",
+        "scripts/check-cache-safety.sh scan pkg/sysprompt/sections/ 0 violations",
+        "Makefile provide make check-cache-safety / make lint collection succeed to  CI",
+        "compileToJSONSchema output out  properties/required/enum full part word classic order ",
+        "ToolRegistry.List() cross  1000 timescallby name word classic order stable define ",
+        "human as injectanti-patternera code  → CI establish immediate fail + IDE submit show ",
+        "VSCode golangci-lint collection succeed  cache_safety analyzer"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented internal/lint/cache_safety.go：go/ast scan 4 kindanti-pattern(time.Now/os.Getwd/math-rand/noneorder  map) + ScanDir/ScanFile/Violation；and N03 StaticCheck doc local level mutual patch ；reuse verify  M48 schema Marshal word classic order confirm define property ；tests/cache_safety_lint_test.go 4  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "N07",
+      "level": "MUST",
+      "cluster": "cluster-8-cache-affinity",
+      "name": "Cache Hit Rate E2E Acceptance Suite (5 Tests)",
+      "description": "stage 6 verify collect close card 。tests/cache_hit_rate_e2e_test.go provide 5   E2E test + tests/testutil/deepseek_mock.go provide Mock DeepSeek Server（Implemented prefix cache mock：follow trace  prompt hash command in  hit_tokens / cut  preset mock cache invalidate / compaction mock cache re build ）。T1 50 round stable define rate  ≥ 95%；T2 cut  preset verify verify （switchafter < 50% afterproceed stable define up upgrade ）；T3 compaction afterrecover reuse （30 round inner recover reuse  ≥ 95%）；T4 multi session and send （10 and send each  ≥ 85%）；T5 add toolsfield scene （5/10/20 toolsfield scene hit ratenot fallback ）。",
+      "ownerPkg": "tests/cache_hit_rate_e2e_test.go + tests/testutil/deepseek_mock.go",
+      "deps": [
+        "N01",
+        "N02",
+        "N03",
+        "N04",
+        "N05",
+        "N06"
+      ],
+      "tests": [
+        "tests/cache_hit_rate_e2e_test.go::TestE2E_50Turns_StableHitRate",
+        "tests/cache_hit_rate_e2e_test.go::TestE2E_PresetSwitch_CacheInvalidates",
+        "tests/cache_hit_rate_e2e_test.go::TestE2E_CompactionHitRateRecovery",
+        "tests/cache_hit_rate_e2e_test.go::TestE2E_MultiSession_NoInterference",
+        "tests/cache_hit_rate_e2e_test.go::TestE2E_ToolCount_HitRateStable"
+      ],
+      "upstreamRefs": [
+        "(local derivative - based on N01-N06 + DeepSeek API mock)"
+      ],
+      "status": "completed",
+      "priority": 0,
+      "estimationMd": "1.5",
+      "acceptance": [
+        "T1 50 round stable define field scene level all hit rate ≥ 95%",
+        "T2 cut  preset afterpre  5 round hit rate < 50%，afterproceed stable define up upgrade ，most after 5 round  ≥ 80%",
+        "T3 compaction after 30 round inner recover reuse  ≥ 95%",
+        "T4 10  and send  session each  ≥ 85%",
+        "T5 5/10/20 toolsfield scene down hit rateall  ≥ 95%",
+        "Mock DeepSeek Server correctlyImplemented prefix cache mock + preset switch cache invalidate + compaction after cache re build ",
+        "testreport report output out each round hit rate + level all value  + most low value "
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented tests/testutil/deepseek_mock.go：PrefixCacheSimulator(public shared pre suffix occupy compare mock KV cache + HTTP mock return usage cachefields) + tests/cache_hit_rate_e2e_test.go 5   E2E cases(T1-T5, includingeach round /all value /most low report report ) full  PASS"
+        }
+      ]
+    },
+    {
+      "id": "N08",
+      "level": "SHOULD",
+      "cluster": "cluster-8-cache-affinity",
+      "name": "Cache Breaking Alert",
+      "description": "stage 7 monitor control 。pkg/llm/tokenmeter.go CacheAlert group item ：singletimeshit rateconflict fallback  > 30% → warn day log ；continuous 5 timeshit rate < 50% → error day log  + can select  webhook communicate know 。alertand N01 CacheStats + S05 Session Telemetry assist same 。",
+      "ownerPkg": "pkg/llm/tokenmeter.go (CacheAlert) + internal/telemetry/cache_alert.go",
+      "deps": [
+        "N01",
+        "S05"
+      ],
+      "tests": [
+        "tests/cache_alert_threshold_test.go"
+      ],
+      "upstreamRefs": [
+        "(local derivative)"
+      ],
+      "status": "completed",
+      "priority": 0,
+      "estimationMd": "0.5",
+      "acceptance": [
+        "singletimeshit rateconflict fallback  > 30% → warn day log output out  session.id / current / previous",
+        "continuous 5 timeshit rate < 50% → error day log  + can select  webhook trigger",
+        "hit raterecover reuse after consecutiveFails re set as  0",
+        "alertthreshold value can via Config config（default acknowledge  threshold=0.5, consecutive=5）"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/llm/cache.go CacheAlert：Observe(singletimesstep fallback >30% warn including session/current/previous + continuous 5 times<0.5 error+webhook + recover reuse re set  consecutiveFails) + threshold value can pair ；tests/cache_alert_threshold_test.go 4  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "N09",
+      "level": "SHOULD",
+      "cluster": "cluster-8-cache-affinity",
+      "name": "Grafana Cache Hit Rate Dashboard + OTel Probes",
+      "description": "stage 7 monitor control 。internal/telemetry/cache_metrics.go provide 4   OTel point standard ：dsh.cache.hit_ratio (Histogram, by session/preset/turn maintain degree ) / dsh.cache.hit_tokens (Counter) / dsh.cache.miss_tokens (Counter) / dsh.cache.broken_count (Counter)。deploy/grafana/dsh-cache-dashboard.json provide 3  surface board ：24h level all hit rate / by preset split split hit rate / cache breakingeventsrate 。alertrule rule ：near  5min hit_ratio_p50 < 0.8 persist proceed  10min → alert。",
+      "ownerPkg": "internal/telemetry/cache_metrics.go + deploy/grafana/dsh-cache-dashboard.json",
+      "deps": [
+        "N01",
+        "N08",
+        "S07"
+      ],
+      "tests": [
+        "tests/cache_metrics_otel_integration_test.go",
+        "deploy/grafana/dsh-cache-dashboard.json (schema validate)"
+      ],
+      "upstreamRefs": [
+        "packages/runtime-diagnostics/telemetry-otel"
+      ],
+      "status": "completed",
+      "priority": 0,
+      "estimationMd": "1.0",
+      "acceptance": [
+        "Mock OTel collector verify verify  4  point standard correctlylead out （including session.id / preset / turn.seq standard tag ）",
+        "Grafana inspect board  JSON via schema validate（3 surface board complete）",
+        "alertrule rule ：near  5min hit_ratio_p50 < 0.8 persist proceed  10min → fire",
+        "dsh.cache.broken_count incheck test to alreadyknow break cachemodetime  +1"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented internal/telemetry/cache_metrics.go：4 point standard (hit_ratio hit_tokens miss_tokens broken_count) + HistogramP50(alertrule rule base standard ) + MarkBroken；deploy/grafana/dsh-cache-dashboard.json 3 surface board (24hall value /preset split split /cache breakingrate )；tests/cache_metrics_otel_integration_test.go 4  cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "H01",
+      "level": "MUST",
+      "cluster": "cluster-9-concurrency-hardening",
+      "name": "Agent Request ctx Propagation (Cancel/Timeout/Trace Propagation)",
+      "description": "when pre toolsexecuteroute path drop discard up cursor  ctx：pkg/tools/pipeline.go contextWithMeta use context.Background() re new build chain ，pkg/agent/agent.go Chat() also pass  context.Background()。lead cause high and send down  up cursor fetch consume /timeout/chain route append trace nonemethod pass broadcast enter toolsImplementedand LLM request seek ，save inrequest seek avalanche crash andnonemethod optimal graceful stop machine risk risk 。refactor：Agent run execute input port connect collect can fetch consume parent  ctx + timeoutpre compute ，runStep/executeTool/pipeline.Run step-by-step layer propagate pass （context.WithValue only continue inherit not re build ），toolsImplementedand DeepSeek request seek all sense know fetch consume 。",
+      "ownerPkg": "pkg/agent + pkg/tools/pipeline.go",
+      "deps": [
+        "M08",
+        "M23"
+      ],
+      "tests": [
+        "tests/ctx_cancel_propagation_test.go",
+        "tests/agent_timeout_budget_test.go"
+      ],
+      "upstreamRefs": [
+        "(local derivative - high concurrency hardening analysis)"
+      ],
+      "status": "completed",
+      "priority": 1,
+      "estimationMd": "0.8",
+      "acceptance": [
+        "client user side fetch consume after，correct inexecute toolscalland LLM request seek all collect to  Done and Agent by  aborted/interrupted collect tail ",
+        "timeoutpre compute to phase afternot session then send start new   LLM/toolscall，alreadyhas callbyfetch consume lang definition close close ",
+        "trace/span（S07）can from  HTTP input port 1 route carry to toolsImplemented ctx",
+        "pressure test down nonecallleak leak （goroutine count and in-flight count count collect converge ）"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented H01 ctx propagate pass ：pkg/tools/pipeline.go ExecContext increase  Ctx fieldsand in Run injectparent  ctx, executeInner use withExecContext(ec.Ctx,ec) propagate pass give toolsImplemented(not then re build  Background); pkg/agent/agent.go increase  runCtx + SetRunContext(parent, timeout) + runContext(), runStep   Chat and executeTool   pipeline.Run all modify walk  runContext(); tests/ctx_cancel_propagation_test.go 2 cases(pipeline propagate pass fetch consume to tools/Agent bind define run execute  ctx fetch consume can to tools) PASS"
+        }
+      ]
+    },
+    {
+      "id": "H02",
+      "level": "MUST",
+      "cluster": "cluster-9-concurrency-hardening",
+      "name": "Persistence Global Lock Sharding / Per-session Async Batch Writer",
+      "description": "pkg/persistence/jsonl.go   buf map by singlefull local  sync.Mutex keep protect ，place has session dialogue and send  Append strong control serialized，is multisession dialogue water level expand expand  most large hot point 。refactor：by SessionID hash wish split piece lock （16/64 shard）mutual not block block ，or each session dialogue exclusive establish events channel + single writer goroutine batch volume combine and persist disk （includingcan config fsync policy），reduce less small  IO andlock race contend 。",
+      "ownerPkg": "pkg/persistence",
+      "deps": [
+        "M43"
+      ],
+      "tests": [
+        "tests/persistence_concurrent_shard_test.go",
+        "tests/persistence_async_writer_flush_test.go"
+      ],
+      "upstreamRefs": [
+        "(local derivative - high concurrency hardening analysis)"
+      ],
+      "status": "completed",
+      "priority": 1,
+      "estimationMd": "1.2",
+      "acceptance": [
+        "32 and send session dialogue same time  Append lock-freeetcwait hot point ，profile display show  shard lock all even split distribute ",
+        "split piece /diff step  writer and M43 crash crash fix reuse lang definition consistent（orphan child  turn still correctlypatch write）",
+        "batch volume persist disk after Flush Checkpoint inenter process exit out time still can full part persist disk not drop ",
+        "existing has  persistence_crash_repair mutually close testfull part  PASS"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "Implemented pkg/persistence/jsonl.go: 16 shard FNV-1a split piece lock  + each  shard afterplatform  writer(ticker/batchSize info number ) + writeMu serializedwritedoc item  + flushShard + optimal graceful  Close; tests/h02 7 cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "H03",
+      "level": "SHOULD",
+      "cluster": "cluster-9-concurrency-hardening",
+      "name": "LLM HTTP Client Timeout & Connection Pool Tuning",
+      "description": "pkg/llm/provider_deepseek/deepseek.go use useempty  http.Client{}，none Timeout，connectionpool reusewalk  http.DefaultTransport but notdo and send call optimal 。refactor：injectcan config Transport（MaxIdleConns / MaxIdleConnsPerHost / MaxConnsPerHost limit stream ）+ Client.Timeout + for  HTTP 429/pass load and S15 point count exit avoid link dynamic ，guard stop mount start connectiondrag dead and send  goroutine。",
+      "ownerPkg": "pkg/llm/provider_deepseek",
+      "deps": [
+        "M07",
+        "S15"
+      ],
+      "tests": [
+        "tests/llm_http_timeout_transport_test.go",
+        "tests/llm_ratelimit_backoff_link_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/llm/llm + providers"
+      ],
+      "status": "completed",
+      "priority": 2,
+      "estimationMd": "0.5",
+      "acceptance": [
+        "MaxConnsPerHost take effect：over pass up limit  and send request seek queuedand non nonelimit build link ",
+        "Timeout to phase   LLM request seek returnreflect map after  LlmFailure{timeout} and non mount dead ",
+        "HTTP 429 trigger S15 exit avoid and record llm/retry events，recover reuse afternot then trigger",
+        "existing save  llm_stream_roundtrip / llm_retry_backoff test PASS"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "pkg/llm/provider_deepseek: exclusive establish  Transport connectionpool  + readSSE goroutine+channel bridge connect  ctx can hit break block block  IO + LlmFailure.Cause/Unwrap; tests/h03 5 cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "H04",
+      "level": "SHOULD",
+      "cluster": "cluster-9-concurrency-hardening",
+      "name": "Session Derived Incremental Fold (Remove O(N^2) Full Replay)",
+      "description": "pkg/agent/agent.go runStep each step all call  session.DeriveMessages(a.log.Events()) for whole segment history history replay fold，long session dialogue  + multi step present  O(N²) release large 。refactor：as  SessionLog increase add tail part incremental fold capability force （only  fold self up timescursor standard by from  new events + should usereadtime  surface replace），and cachederiveresult result at deliver shadow /readroute path ，cursor standard in surface replace/compaction time invalidatere build 。",
+      "ownerPkg": "pkg/session + pkg/agent",
+      "deps": [
+        "M05",
+        "M08",
+        "M21"
+      ],
+      "tests": [
+        "tests/derive_incremental_fold_test.go",
+        "tests/derive_cursor_surface_invalidate_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/session fold"
+      ],
+      "status": "completed",
+      "priority": 2,
+      "estimationMd": "0.8",
+      "acceptance": [
+        "incremental fold result result and M05 full fold step-by-step fieldsconsistent",
+        "long session dialogue （1k+ events）incremental fold singlestep consume time andeventscount resolve couple （near  O(1)）",
+        "surface replace aftercursor standard correctlyinvalidateand re build ，not returnstale old derive",
+        "session_fold_consistency / compaction_replace_surface test PASS"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "pkg/session/incremental.go IncrementalFolder + 9 Apply incremental + Snapshot/Meta + dirty lazy re build ; session.go Append hook; tests/h04 PASS + Benchmark 3437x"
+        }
+      ]
+    },
+    {
+      "id": "H05",
+      "level": "SHOULD",
+      "cluster": "cluster-9-concurrency-hardening",
+      "name": "Persistence IO Memory & Read Reuse",
+      "description": "pkg/persistence/jsonl.go：Append each timeseventsre new as  buf slice split pair ；Flush each execute  json.Marshal + append('\\n') produce produce in space split pair ；Load   events notpre split pair ；Snapshot() each timesfull Load then  len()。refactor：JSON encode code reuse sync.Pool bytes.Buffer；Load pre split pair capacity；Snapshot/eventscount usedoc item execute count meta count data or cursor standard preventfullread。",
+      "ownerPkg": "pkg/persistence",
+      "deps": [
+        "M43"
+      ],
+      "tests": [
+        "tests/persistence_io_reuse_bench_test.go",
+        "tests/persistence_snapshot_cursor_test.go"
+      ],
+      "upstreamRefs": [
+        "(local derivative - high concurrency hardening analysis)"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.4",
+      "acceptance": [
+        "100 times Append+Flush base standard memorysplit pair count display manifest down fallback （bench for compare base thread ）",
+        "10k eventssession dialogue  Snapshot() not then triggerfull JSON anti order list ize ",
+        "execute as andexisting has  persistence_crash_repair / persistence_jsonl testconsistent"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "pkg/persistence/jsonl.go: marshalBufPool+bufioWriterPool dual pool  + pooled encode code modify write append/rewrite + IOStats; tests/h05 PASS back attribute 9/9"
+        }
+      ]
+    },
+    {
+      "id": "H06",
+      "level": "SHOULD",
+      "cluster": "cluster-9-concurrency-hardening",
+      "name": "Tool Pipeline Object Pool & Lazy Allocation",
+      "description": "pkg/tools/pipeline.go Run() each timescallnew build  ExecContext + ToolCallResult + Meta map[string]any{}，high and send toolsmulticall field scene  GC pressure force large 。refactor：Meta lazy property initial start ize （useto then build ），ExecContext/ToolCallResult core core for object via  sync.Pool reuse（inject intent result result escape escape need safe full attribute return ），or usestack up reuse。",
+      "ownerPkg": "pkg/tools/pipeline.go",
+      "deps": [
+        "M23"
+      ],
+      "tests": [
+        "tests/tools_pipeline_pool_bench_test.go",
+        "tests/tools_pipeline_pool_safety_test.go"
+      ],
+      "upstreamRefs": [
+        "(local derivative - high concurrency hardening analysis)"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "0.4",
+      "acceptance": [
+        "Meta not writetime not split pair any what  map",
+        "object poolreuseafterand send safe full （go test -race nonerace state 、nonecount data serial interfere ）",
+        "existing has  tools_waterfall / tools_conclude_turn test PASS"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "pkg/tools/pooled.go: execContextPool reuse ExecContext/Meta map + SetPooled + RunPooled; tests/h06 4 cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "H07",
+      "level": "SHOULD",
+      "cluster": "cluster-9-concurrency-hardening",
+      "name": "Shared Registry Read-only & Tool Schema Precompiled Cache",
+      "description": "tools/skills/credentials/settings（M03/M38/M39/M40）inmultisession dialogue hot route path up anti reuse  List()/encode translate  schema。refactor：start dynamic phase freezeinject registry table writtenafterenter input only read，writtenadopt use copy-on-write or  atomic.Pointer swap table by fetch consume hot route path readlock ；system system submit show in  tools schema define order output out （N06）precompilecache，preventeach  step re encode  JSON。",
+      "ownerPkg": "pkg/tools + pkg/skills + pkg/scope + pkg/sysprompt",
+      "deps": [
+        "M03",
+        "M09",
+        "N06"
+      ],
+      "tests": [
+        "tests/registry_readonly_schema_cache_test.go",
+        "tests/registry_copy_on_write_swap_test.go"
+      ],
+      "upstreamRefs": [
+        "(local derivative - high concurrency hardening analysis)"
+      ],
+      "status": "completed",
+      "priority": 3,
+      "estimationMd": "1.0",
+      "acceptance": [
+        "freezeafterand send readinject registry table not add lock （atomic.Pointer readsafe full ）",
+        "run execute phase inject registry table change update walk  copy-on-write swap table ，readentity not sense know tear split ",
+        "tools schema precompilecache：same configdown  N round  prompt group assemble only encode translate  1 times",
+        "schema still keep persist  N06 word classic order confirm define property （cachecorrectlyproperty ）"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "pkg/registry Freezable generic type only readinject registry in core  + commands persist local ; tests/h07 6 cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "H08",
+      "level": "COULD",
+      "cluster": "cluster-9-concurrency-hardening",
+      "name": "Goroutine Resource Governance & Single Watcher",
+      "description": "long  idle   Agent worker goroutine normal resident not back collect ；pkg/skills useround query  watch andwith session dialogue count release large  CPU open destroy 。refactor：Agent empty idle back collect （session dialogue by LRU filter eliminate  + Dispose fallback bottom ，pair combine  S14 workspace/resume field scene ）；skills monitor listen system 1 as single fsnotify watcher + full local change update split send 。",
+      "ownerPkg": "pkg/agent + pkg/skills",
+      "deps": [
+        "M08",
+        "M40",
+        "S14"
+      ],
+      "tests": [
+        "tests/agent_idle_reclaim_test.go",
+        "tests/skills_single_watcher_test.go"
+      ],
+      "upstreamRefs": [
+        "packages/core/agent + packages/core/skills"
+      ],
+      "status": "completed",
+      "priority": 4,
+      "estimationMd": "0.6",
+      "acceptance": [
+        "noneany service empty idle over pass threshold value after worker goroutine exit out ，new request seek can re build ",
+        "resume-on-open session dialogue still capability correctlycold start dynamic recover reuse ",
+        "skill change update still capability trigger N04 change-only injectandsingle watcher not re reuse ",
+        "existing has  skills_registry_fsnotify test PASS"
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "pkg/jobs Supervisor system 1 lifecycle; tests/h08 6 cases PASS"
+        }
+      ]
+    },
+    {
+      "id": "T01",
+      "level": "SHOULD",
+      "cluster": "cluster-10-test-skeleton",
+      "name": "Executable Test Skeleton Generation (328 Cases -> _test.go)",
+      "description": "depend data  docs/TEST_CASES.md full 328  testcasessetting count ，as when pre still notis now has  tests/ override cases（including 14  patch fill build discuss  + notImplementeditem  S10 / H01-H08 etc）generatecan encode translate   _test.go skeleton framework ；alreadycomplete succeed item  boundary boundary /collection succeed patch fill cases1 and patch align 。each  skeleton framework package includingtestfunction count  TestTC_<any service ID>_<order number > + detailed detailed in doc inject release （pre set  item /teststep step /pre phase result result ）+ can encode translate occupy position break language （alreadyImplementeditem back fill true real break language ，notImplementeditem  t.Skip + TODO），ensure `go test ./tests/` can encode translate via。",
+      "ownerPkg": "tests/",
+      "deps": [],
+      "tests": [],
+      "upstreamRefs": [
+        "(local derivative - docs/TEST_CASES.md 328 cases)"
+      ],
+      "status": "completed",
+      "priority": 5,
+      "estimationMd": "1.5",
+      "acceptance": [
+        "as each 1  notis now has  tests/ override casesgeneratecan encode translate  _test.go skeleton framework ，cases ID and TC-<any service ID>-<order number > 1 1 for should ",
+        "skeleton framework includingin doc inject release （pre set  item /teststep step /pre phase result result ）+ can encode translate occupy position break language ，go build ./tests/... noneencode translate error",
+        "alreadyhas success capability  skeleton framework casesback fill true real break language and  PASS；notImplementeditem by  t.Skip + TODO standard record ，not refer input encode translate error",
+        "complete succeed aftersame step update new  docs/TEST_CASES.md and docs/TEST_CASES_REPORT.html  「status / close link doc item 」list "
+      ],
+      "history": [
+        {
+          "at": "2026-08-31",
+          "note": "cmd/gen_tc_skeletons generate tests/tc_skeletons_test.go 51  can encode translate skeleton framework , TC for should ; fullback attribute  PASS"
+        }
+      ]
+    }
+  ]
+}
