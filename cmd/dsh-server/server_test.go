@@ -510,6 +510,32 @@ func TestWebSocketMux(t *testing.T) {
 	if productionValue["sessionId"] != "production-envelope-session" {
 		t.Fatalf("production DshMux envelope resolved the wrong session: %v", productionValue)
 	}
+
+	// 4. Workspace state is a real stream: baseline first, then complete-set
+	// archive updates used by the Flutter session drawer.
+	if err := ws.WriteJSON(map[string]any{
+		"type": "open", "streamId": "workspace-stream", "endpoint": "workspace/follow",
+		"payload": map[string]any{"args": map[string]any{}},
+	}); err != nil {
+		t.Fatalf("open workspace/follow failed: %v", err)
+	}
+	var workspaceBaseline map[string]any
+	if err := ws.ReadJSON(&workspaceBaseline); err != nil {
+		t.Fatalf("read workspace baseline: %v", err)
+	}
+	baselineValue, _ := workspaceBaseline["value"].(map[string]any)
+	if baselineValue["type"] != "baseline" {
+		t.Fatalf("expected workspace baseline, got %v", workspaceBaseline)
+	}
+	server.setSessionArchived("production-envelope-session", true)
+	var workspaceUpdate map[string]any
+	if err := ws.ReadJSON(&workspaceUpdate); err != nil {
+		t.Fatalf("read workspace archive update: %v", err)
+	}
+	updateValue, _ := workspaceUpdate["value"].(map[string]any)
+	if updateValue["type"] != "archived" {
+		t.Fatalf("expected workspace archive update, got %v", workspaceUpdate)
+	}
 }
 
 func TestPromptPassesFreshAndHistoricalMessagesToAdapter(t *testing.T) {

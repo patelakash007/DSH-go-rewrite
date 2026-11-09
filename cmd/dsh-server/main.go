@@ -67,6 +67,10 @@ type Server struct {
 
 	sessionsMu sync.RWMutex
 	sessions   map[string]*SessionRecord
+
+	workspaceMu   sync.Mutex
+	workspaceSubs map[string]chan map[string]any
+	archived      map[string]bool
 }
 
 func newServer(port int, homeDir string) (*Server, error) {
@@ -105,14 +109,16 @@ func newServer(port int, homeDir string) (*Server, error) {
 	dsAdapter := provider_deepseek.NewDeepSeek(credStore)
 
 	s := &Server{
-		port:        port,
-		homeDir:     homeDir,
-		launchToken: launchToken,
-		clientId:    clientId,
-		dbStore:     dbStore,
-		credStore:   credStore,
-		adapter:     dsAdapter,
-		sessions:    make(map[string]*SessionRecord),
+		port:          port,
+		homeDir:       homeDir,
+		launchToken:   launchToken,
+		clientId:      clientId,
+		dbStore:       dbStore,
+		credStore:     credStore,
+		adapter:       dsAdapter,
+		sessions:      make(map[string]*SessionRecord),
+		workspaceSubs: make(map[string]chan map[string]any),
+		archived:      make(map[string]bool),
 	}
 
 	// Restore known sessions from SQLite
@@ -173,6 +179,42 @@ func (s *Server) getOrCreateSession(rawId string, cwd string) *SessionRecord {
 	}
 	s.sessions[rawId] = rec
 	return rec
+}
+
+func (s *Server) archivedSessionIDs() []string {
+	s.workspaceMu.Lock()
+	defer s.workspaceMu.Unlock()
+	ids := make([]string, 0, len(s.archived))
+	for id, archived := range s.archived {
+		if archived {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func (s *Server) setSessionArchived(sessionID string, archived bool) []string {
+	s.workspaceMu.Lock()
+	if archived {
+		s.archived[sessionID] = true
+	} else {
+		delete(s.archived, sessionID)
+	}
+	ids := make([]string, 0, len(s.archived))
+	for id := range s.archived {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	frame := map[string]any{"type": "archived", "archivedSessionIds": ids}
+	for _, ch := range s.workspaceSubs {
+		select {
+		case ch <- frame:
+		default:
+		}
+	}
+	s.workspaceMu.Unlock()
+	return ids
 }
 
 func (s *Server) makeCookieName(authority string) string {
@@ -650,7 +692,32 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		}, nil
 
 	case "workspace/archiveSession", "workspace/unarchiveSession":
-		return map[string]any{"archivedSessionIds": []string{}}, nil
+		reqMap, _ := args["request"].(map[string]any)
+		sessionID, _ := reqMap["sessionId"].(string)
+		if sessionID == "" {
+			return nil, &RPCError{Code: "gateway/arguments-invalid", Message: "sessionId is required"}
+		}
+		return map[string]any{
+			"archivedSessionIds": s.setSessionArchived(sessionID, endpoint == "workspace/archiveSession"),
+		}, nil
+
+	case "llm/listProviders":
+		return []map[string]any{{"id": "deepseek", "name": "DeepSeek"}}, nil
+
+	case "llm/listConfigurableProviders", "commands/list", "pluginManager/listBundles", "pluginManager/listPlugins":
+		return []any{}, nil
+
+	case "skills/list":
+		return map[string]any{"skills": []any{}}, nil
+
+	case "agentPresets/list":
+		return map[string]any{"presets": []any{}}, nil
+
+	case "settings/describe":
+		return map[string]any{"writable": false, "namespaces": []any{}}, nil
+
+	case "pluginInventory/list":
+		return map[string]any{"plugins": []any{}}, nil
 
 	case "session/search":
 		query, _ := args["query"].(string)
@@ -1021,20 +1088,33 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 		key string
 		ch  chan []byte
 	}
+	type workspaceSubscription struct {
+		key string
+		ch  chan map[string]any
+	}
 	subscriptions := make(map[string]subscription)
+	workspaceSubscriptions := make(map[string]workspaceSubscription)
 	removeSubscription := func(streamID string) {
-		sub, ok := subscriptions[streamID]
-		if !ok {
-			return
+		if sub, ok := subscriptions[streamID]; ok {
+			delete(subscriptions, streamID)
+			sub.rec.mu.Lock()
+			delete(sub.rec.Subs, sub.key)
+			close(sub.ch)
+			sub.rec.mu.Unlock()
 		}
-		delete(subscriptions, streamID)
-		sub.rec.mu.Lock()
-		delete(sub.rec.Subs, sub.key)
-		close(sub.ch)
-		sub.rec.mu.Unlock()
+		if sub, ok := workspaceSubscriptions[streamID]; ok {
+			delete(workspaceSubscriptions, streamID)
+			s.workspaceMu.Lock()
+			delete(s.workspaceSubs, sub.key)
+			close(sub.ch)
+			s.workspaceMu.Unlock()
+		}
 	}
 	defer func() {
 		for streamID := range subscriptions {
+			removeSubscription(streamID)
+		}
+		for streamID := range workspaceSubscriptions {
 			removeSubscription(streamID)
 		}
 	}()
@@ -1190,6 +1270,40 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 				}(streamId, subKey, ch, rec)
+			} else if endpoint == "workspace/follow" {
+				removeSubscription(streamId)
+				key := uuid.MustV4()
+				ch := make(chan map[string]any, 16)
+				s.workspaceMu.Lock()
+				s.workspaceSubs[key] = ch
+				archived := make([]string, 0, len(s.archived))
+				for sessionID := range s.archived {
+					archived = append(archived, sessionID)
+				}
+				sort.Strings(archived)
+				s.workspaceMu.Unlock()
+				workspaceSubscriptions[streamId] = workspaceSubscription{key: key, ch: ch}
+				_ = safeWrite(map[string]any{
+					"type": "item", "streamId": streamId,
+					"value": map[string]any{
+						"type": "baseline",
+						"value": map[string]any{
+							"items": []any{}, "archivedSessionIds": archived, "pinnedSessionIds": []any{},
+						},
+					},
+				})
+				go func(stream string, updates chan map[string]any) {
+					for update := range updates {
+						if err := safeWrite(map[string]any{"type": "item", "streamId": stream, "value": update}); err != nil {
+							break
+						}
+					}
+				}(streamId, ch)
+			} else {
+				_ = safeWrite(map[string]any{
+					"type": "error", "streamId": streamId,
+					"error": map[string]any{"code": "gateway/method-not-found", "message": "native engine does not implement " + endpoint},
+				})
 			}
 
 		case "cancel", "end":
