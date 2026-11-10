@@ -762,6 +762,45 @@ func (a *blockingAdapter) Chat(ctx context.Context, _ llm.ChatRequest, callback 
 	return llm.Usage{PromptTokens: 1, CompletionTokens: 1}, nil
 }
 
+func TestNativeCotTranslation(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	limits, rpcErr := server.dispatchRPC(context.Background(), "cotTranslation/limits", map[string]any{})
+	if rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	value := limits.(map[string]any)
+	if value["maxTextChars"] != cotTranslationMaxChars {
+		t.Fatalf("translation limits = %#v", value)
+	}
+	if _, rpcErr := server.dispatchRPC(context.Background(), "cotTranslation/translate", map[string]any{
+		"request": map[string]any{
+			"text": "reasoning", "targetLanguage": "English", "provider": cotTranslationProvider,
+		},
+	}); rpcErr == nil || rpcErr.Code != "cotTranslation/failed" {
+		t.Fatalf("translation without key = %+v", rpcErr)
+	}
+	server.adapter = &recordingAdapter{requests: make(chan llm.ChatRequest, 4)}
+	if err := server.credStore.Set(context.Background(), brand.NewCredentialRef("DEEPSEEK_API_KEY"), "test-key"); err != nil {
+		t.Fatal(err)
+	}
+	translated, rpcErr := server.dispatchRPC(context.Background(), "cotTranslation/translate", map[string]any{
+		"request": map[string]any{
+			"text": "reasoning", "targetLanguage": "English", "provider": cotTranslationProvider,
+		},
+	})
+	if rpcErr != nil || translated != "native reply" {
+		t.Fatalf("translation = %#v, %+v", translated, rpcErr)
+	}
+	if _, rpcErr := server.dispatchRPC(context.Background(), "cotTranslation/translate", map[string]any{
+		"request": map[string]any{
+			"text": "reasoning", "targetLanguage": "English", "provider": "bing",
+		},
+	}); rpcErr == nil || rpcErr.Code != "cotTranslation/failed" {
+		t.Fatalf("unsupported translation provider = %+v", rpcErr)
+	}
+}
+
 func TestNativeUserQuestions(t *testing.T) {
 	server, _, cleanup := setupTestServer(t)
 	defer cleanup()

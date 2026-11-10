@@ -1118,6 +1118,9 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 	case "userQuestions/answer":
 		return s.dispatchUserQuestionRPC(endpoint, args)
 
+	case "cotTranslation/limits", "cotTranslation/translate":
+		return s.dispatchCotRPC(endpoint, args)
+
 	case "dynamicCordisRunner/inventory":
 		return []any{}, nil
 

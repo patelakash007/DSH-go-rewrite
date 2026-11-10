@@ -366,8 +366,8 @@ func (s *Server) startShellJob(sessionID, command, cwd string, timeout time.Dura
 				detail = waitErr.Error()
 			}
 		}
-		job.finish(status, detail)
 		s.jobs.remove(job)
+		job.finish(status, detail)
 	}()
 	if timeout > 0 {
 		time.AfterFunc(timeout, func() {
