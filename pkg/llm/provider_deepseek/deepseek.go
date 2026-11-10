@@ -215,6 +215,7 @@ type chatFunction struct {
 }
 
 type chatToolCall struct {
+	Index    int                  `json:"index,omitempty"`
 	ID       string               `json:"id"`
 	Type     string               `json:"type"`
 	Function chatToolCallFunction `json:"function"`
@@ -300,11 +301,24 @@ func (d *DeepSeek) buildPayload(req llm.ChatRequest) chatRequest {
 		var sb strings.Builder
 		for _, blk := range m.Content {
 			switch blk.Kind {
-			case llm.BlockText:
+			case llm.BlockText, llm.BlockReasoning:
 				sb.WriteString(blk.Text)
+			case llm.BlockToolUse:
+				if blk.ToolCall != nil {
+					arguments, _ := json.Marshal(blk.ToolCall.Input)
+					cm.ToolCalls = append(cm.ToolCalls, chatToolCall{
+						ID:   blk.ToolCall.ID,
+						Type: "function",
+						Function: chatToolCallFunction{
+							Name:      blk.ToolCall.Name,
+							Arguments: string(arguments),
+						},
+					})
+				}
 			case llm.BlockToolResult:
 				if blk.ToolResult != nil {
-					sb.WriteString("[tool_result:" + blk.ToolResult.Content + "]")
+					cm.ToolCallID = blk.ToolResult.ToolUseID
+					sb.WriteString(blk.ToolResult.Content)
 				}
 			}
 		}
@@ -368,6 +382,31 @@ func (d *DeepSeek) readSSE(ctx context.Context, r io.Reader, cb func(llm.StreamC
 	}()
 
 	var usage llm.Usage
+	type pendingToolCall struct {
+		id        string
+		name      string
+		arguments strings.Builder
+	}
+	pendingTools := map[int]*pendingToolCall{}
+	toolOrder := make([]int, 0)
+	flushTools := func() {
+		if cb == nil || len(toolOrder) == 0 {
+			return
+		}
+		for _, index := range toolOrder {
+			pending := pendingTools[index]
+			if pending == nil {
+				continue
+			}
+			cb(llm.StreamChunk{Kind: llm.ChunkToolCall, ToolCall: &llm.ToolCall{
+				ID:    pending.id,
+				Name:  pending.name,
+				Input: parseArgs(pending.arguments.String()),
+			}})
+		}
+		pendingTools = map[int]*pendingToolCall{}
+		toolOrder = toolOrder[:0]
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -379,13 +418,14 @@ func (d *DeepSeek) readSSE(ctx context.Context, r io.Reader, cb func(llm.StreamC
 			}
 		case res, ok := <-ch:
 			if !ok {
-
+				flushTools()
 				return usage, nil
 			}
 			if res.done {
 				if res.err != nil {
 					return usage, &llm.LlmFailure{Kind: llm.FailOverload, Message: res.err.Error(), Cause: res.err}
 				}
+				flushTools()
 				return usage, nil
 			}
 
@@ -398,6 +438,7 @@ func (d *DeepSeek) readSSE(ctx context.Context, r io.Reader, cb func(llm.StreamC
 			}
 			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			if data == "[DONE]" {
+				flushTools()
 				if cb != nil {
 					cb(llm.StreamChunk{Kind: llm.ChunkDone})
 				}
@@ -429,11 +470,19 @@ func (d *DeepSeek) readSSE(ctx context.Context, r io.Reader, cb func(llm.StreamC
 					cb(llm.StreamChunk{Kind: llm.ChunkText, Text: delta.Content})
 				}
 				for _, tc := range delta.ToolCalls {
-					cb(llm.StreamChunk{Kind: llm.ChunkToolCall, ToolCall: &llm.ToolCall{
-						ID:    tc.ID,
-						Name:  tc.Function.Name,
-						Input: parseArgs(tc.Function.Arguments),
-					}})
+					pending := pendingTools[tc.Index]
+					if pending == nil {
+						pending = &pendingToolCall{}
+						pendingTools[tc.Index] = pending
+						toolOrder = append(toolOrder, tc.Index)
+					}
+					if tc.ID != "" {
+						pending.id = tc.ID
+					}
+					if tc.Function.Name != "" {
+						pending.name = tc.Function.Name
+					}
+					pending.arguments.WriteString(tc.Function.Arguments)
 				}
 			}
 		}

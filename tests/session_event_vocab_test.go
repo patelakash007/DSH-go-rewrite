@@ -47,6 +47,8 @@ func sampleDataFor(t session.EventType) session.EventData {
 		return session.InjectionContextData{Name: "skills", Content: "catalog", Hash: "h1"}
 	case session.EventSessionTitle:
 		return session.SessionTitleData{Title: "My Session"}
+	case session.EventModelSelection:
+		return session.ModelSelectionData{Provider: "deepseek", Model: "deepseek-chat"}
 	case session.EventToolCall:
 		return session.ToolCallData{CallID: brand.NewToolCallID("call_1"), Tool: "bash", Input: json.RawMessage(`{"cmd":"ls"}`)}
 	case session.EventToolResult:

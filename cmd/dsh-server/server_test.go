@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -43,7 +45,9 @@ func setupTestServer(t *testing.T) (*Server, *httptest.Server, func()) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", server.handleRoot)
 	mux.HandleFunc("/api/remote.mux", server.handleMux)
+	mux.HandleFunc("/api/file", server.handleFile)
 	mux.HandleFunc("/api/", server.handleRPC)
+	mux.HandleFunc("/dsh-go/v1/info", server.handleBuildInfo)
 	mux.HandleFunc("/dsh-go/v1/sessions/deletion", server.handleSessionDeletionCapability)
 	mux.HandleFunc("/dsh-go/v1/sessions/delete", server.handleSessionDelete)
 
@@ -56,6 +60,154 @@ func setupTestServer(t *testing.T) (*Server, *httptest.Server, func()) {
 	}
 
 	return server, ts, cleanup
+}
+
+type scriptedToolAdapter struct {
+	mu       sync.Mutex
+	requests []llm.ChatRequest
+}
+
+func (a *scriptedToolAdapter) Name() string { return "scripted-tools" }
+
+func (a *scriptedToolAdapter) Chat(_ context.Context, request llm.ChatRequest, callback func(llm.StreamChunk)) (llm.Usage, error) {
+	a.mu.Lock()
+	a.requests = append(a.requests, request)
+	call := len(a.requests)
+	a.mu.Unlock()
+	if call == 1 {
+		callback(llm.StreamChunk{Kind: llm.ChunkToolCall, ToolCall: &llm.ToolCall{
+			ID: "native-call-1", Name: "shell", Input: map[string]any{"command": "printf native > agent-tool.txt"},
+		}})
+	} else {
+		callback(llm.StreamChunk{Kind: llm.ChunkText, Text: "Native tool completed."})
+	}
+	callback(llm.StreamChunk{Kind: llm.ChunkDone})
+	return llm.Usage{PromptTokens: 5, CompletionTokens: 3}, nil
+}
+
+func TestNativeAgentToolApprovalAndHistory(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	adapter := &scriptedToolAdapter{}
+	server.adapter = adapter
+	rec := server.getOrCreateSession("native-tools", "")
+
+	_, rpcErr := server.dispatchRPC(context.Background(), "session/prompt", map[string]any{
+		"request": map[string]any{
+			"sessionId": "native-tools", "requestId": "tool-request",
+			"content": []any{map[string]any{"type": "text", "text": "create the marker"}},
+		},
+	})
+	if rpcErr != nil {
+		t.Fatalf("prompt: %+v", rpcErr)
+	}
+
+	var eventID string
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		server.hostMu.Lock()
+		for id := range server.pendingApprovals {
+			eventID = id
+			break
+		}
+		server.hostMu.Unlock()
+		if eventID != "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if eventID == "" {
+		t.Fatal("shell tool did not request approval")
+	}
+	server.resolveHostEvent(eventID, map[string]any{"kind": "result", "value": "allowed-once"})
+
+	marker := filepath.Join(server.workspaceDir, "agent-tool.txt")
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(marker); err == nil && string(data) == "native" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if data, err := os.ReadFile(marker); err != nil || string(data) != "native" {
+		t.Fatalf("native shell marker = %q, %v", data, err)
+	}
+
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		rec.mu.Lock()
+		idle := rec.Cancel == nil
+		rec.mu.Unlock()
+		if idle {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	adapter.mu.Lock()
+	requests := append([]llm.ChatRequest(nil), adapter.requests...)
+	adapter.mu.Unlock()
+	if len(requests) != 2 {
+		t.Fatalf("model requests = %d, want 2", len(requests))
+	}
+	if len(requests[0].Tools) == 0 {
+		t.Fatal("native tools were not advertised to the model")
+	}
+	roles := make([]llm.Role, 0, len(requests[1].Messages))
+	for _, message := range requests[1].Messages {
+		roles = append(roles, message.Role)
+	}
+	if len(roles) < 3 || roles[len(roles)-2] != llm.RoleAssistant || roles[len(roles)-1] != llm.RoleTool {
+		t.Fatalf("second request lost tool protocol: %v", roles)
+	}
+
+	seen := map[string]bool{}
+	rec.mu.Lock()
+	for _, event := range rec.Events {
+		seen[event["type"].(string)] = true
+	}
+	rec.mu.Unlock()
+	for _, eventType := range []string{"approval/asked", "approval/decided", "tool/call", "tool/result", "assistant/message", "turn/end"} {
+		if !seen[eventType] {
+			t.Fatalf("missing %s event; got %v", eventType, seen)
+		}
+	}
+}
+
+func TestWorkspaceRPCConfinesAndReadsFiles(t *testing.T) {
+	server, ts, cleanup := setupTestServer(t)
+	defer cleanup()
+	rec := server.getOrCreateSession("workspace-rpc", "")
+	if err := os.WriteFile(filepath.Join(server.workspaceDir, "hello.txt"), []byte("one\ntwo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	value, rpcErr := server.dispatchRPC(context.Background(), "workspaceFiles/read", map[string]any{
+		"workspaceFileScopeId": rec.ID.Raw(), "path": "hello.txt",
+		"range": map[string]any{"offset": 2.0, "limit": 1.0},
+	})
+	if rpcErr != nil {
+		t.Fatalf("read: %+v", rpcErr)
+	}
+	encoded, _ := json.Marshal(value)
+	if !strings.Contains(string(encoded), `"text":"two"`) {
+		t.Fatalf("read response = %s", encoded)
+	}
+	if _, rpcErr := server.dispatchRPC(context.Background(), "workspaceFiles/stat", map[string]any{
+		"workspaceFileScopeId": rec.ID.Raw(), "path": "../outside",
+	}); rpcErr == nil || rpcErr.Code != "workspace-file/not-allowed" {
+		t.Fatalf("traversal response = %+v", rpcErr)
+	}
+
+	cookie := getAuthCookie(t, server, ts)
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/file?path=hello.txt", nil)
+	req.AddCookie(cookie)
+	response, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("file status = %d", response.StatusCode)
+	}
 }
 
 func getAuthCookie(t *testing.T, server *Server, ts *httptest.Server) *http.Cookie {

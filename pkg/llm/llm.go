@@ -21,6 +21,7 @@ const (
 	RoleSystem    Role = "system"
 	RoleUser      Role = "user"
 	RoleAssistant Role = "assistant"
+	RoleTool      Role = "tool"
 )
 
 type ContentBlockKind string
@@ -89,6 +90,27 @@ func NewUserMessage(text string) Message {
 
 func NewAssistantText(text string) Message {
 	return Message{Role: RoleAssistant, Content: []ContentBlock{Text(text)}}
+}
+
+func NewAssistantMessage(text string, calls ...*ToolCall) Message {
+	content := make([]ContentBlock, 0, len(calls)+1)
+	if text != "" {
+		content = append(content, Text(text))
+	}
+	for _, call := range calls {
+		if call != nil {
+			content = append(content, ToolUse(call))
+		}
+	}
+	return Message{Role: RoleAssistant, Content: content}
+}
+
+func NewToolResultMessage(callID, content string, isError bool) Message {
+	return Message{Role: RoleTool, Content: []ContentBlock{ToolResult(&ToolResultContent{
+		ToolUseID: callID,
+		Content:   content,
+		IsError:   isError,
+	})}}
 }
 
 // ============================================================================

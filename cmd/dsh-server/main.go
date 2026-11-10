@@ -24,10 +24,13 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/JopenChen/dsh-go/pkg/agent"
 	"github.com/JopenChen/dsh-go/pkg/brand"
 	"github.com/JopenChen/dsh-go/pkg/credentials"
 	"github.com/JopenChen/dsh-go/pkg/llm"
 	"github.com/JopenChen/dsh-go/pkg/llm/provider_deepseek"
+	"github.com/JopenChen/dsh-go/pkg/nativefs"
+	"github.com/JopenChen/dsh-go/pkg/nativetools"
 	"github.com/JopenChen/dsh-go/pkg/persistence/sqlite"
 	"github.com/JopenChen/dsh-go/pkg/session"
 	"github.com/JopenChen/dsh-go/pkg/storage"
@@ -40,30 +43,43 @@ var upgrader = websocket.Upgrader{
 
 // SessionRecord represents the in-memory state of an active session.
 type SessionRecord struct {
-	ID        brand.SessionID
-	Title     string
-	Cwd       string
-	Model     string
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	Log       *session.SessionLog
-	Events    []map[string]any
-	Subs      map[string]chan []byte
-	Cancel    context.CancelFunc
-	RunID     string
-	Requests  map[string]struct{}
-	mu        sync.Mutex
+	ID         brand.SessionID
+	Title      string
+	Cwd        string
+	Model      string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+	Log        *session.SessionLog
+	Events     []map[string]any
+	Subs       map[string]chan []byte
+	Cancel     context.CancelFunc
+	RunID      string
+	Requests   map[string]struct{}
+	Permission string
+	Agent      *agent.Agent
+	Tools      *nativetools.Registry
+	stopLog    func()
+
+	attemptID       string
+	attemptRevision int64
+	attemptIndex    int64
+	attemptTurn     uint64
+	attemptStep     uint64
+	attemptEnded    bool
+	mu              sync.Mutex
 }
 
 // Server encapsulates the DSH HTTP/WebSocket backend.
 type Server struct {
-	port        int
-	homeDir     string
-	launchToken string
-	clientId    string
-	dbStore     *sqlite.Store
-	credStore   *credentials.Store
-	adapter     llm.LLMAdapter
+	port         int
+	homeDir      string
+	launchToken  string
+	clientId     string
+	dbStore      *sqlite.Store
+	credStore    *credentials.Store
+	adapter      llm.LLMAdapter
+	workspaceDir string
+	files        *nativefs.Service
 
 	sessionsMu sync.RWMutex
 	sessions   map[string]*SessionRecord
@@ -71,11 +87,27 @@ type Server struct {
 	workspaceMu   sync.Mutex
 	workspaceSubs map[string]chan map[string]any
 	archived      map[string]bool
+
+	hostMu           sync.Mutex
+	hostSubs         map[string]chan map[string]any
+	pendingApprovals map[string]*pendingApproval
 }
 
 func newServer(port int, homeDir string) (*Server, error) {
+	workspaceDir := os.Getenv("DSH_WORKSPACE_ROOT")
+	if workspaceDir == "" {
+		workspaceDir = filepath.Join(homeDir, "workspace")
+	}
+	return newServerWithWorkspace(port, homeDir, workspaceDir)
+}
+
+func newServerWithWorkspace(port int, homeDir, workspaceDir string) (*Server, error) {
 	if err := os.MkdirAll(homeDir, 0755); err != nil {
 		return nil, fmt.Errorf("mkdir home: %w", err)
+	}
+	files, err := nativefs.New(workspaceDir)
+	if err != nil {
+		return nil, fmt.Errorf("initialize native workspace: %w", err)
 	}
 
 	// Launch Token (32 hex characters)
@@ -109,16 +141,20 @@ func newServer(port int, homeDir string) (*Server, error) {
 	dsAdapter := provider_deepseek.NewDeepSeek(credStore)
 
 	s := &Server{
-		port:          port,
-		homeDir:       homeDir,
-		launchToken:   launchToken,
-		clientId:      clientId,
-		dbStore:       dbStore,
-		credStore:     credStore,
-		adapter:       dsAdapter,
-		sessions:      make(map[string]*SessionRecord),
-		workspaceSubs: make(map[string]chan map[string]any),
-		archived:      make(map[string]bool),
+		port:             port,
+		homeDir:          homeDir,
+		launchToken:      launchToken,
+		clientId:         clientId,
+		dbStore:          dbStore,
+		credStore:        credStore,
+		adapter:          dsAdapter,
+		workspaceDir:     files.Root(),
+		files:            files,
+		sessions:         make(map[string]*SessionRecord),
+		workspaceSubs:    make(map[string]chan map[string]any),
+		archived:         make(map[string]bool),
+		hostSubs:         make(map[string]chan map[string]any),
+		pendingApprovals: make(map[string]*pendingApproval),
 	}
 
 	// Restore known sessions from SQLite
@@ -129,27 +165,37 @@ func newServer(port int, homeDir string) (*Server, error) {
 			sID := brand.NewSessionID(rawId)
 			evs, err := dbStore.Load(ctx, sID)
 			if err == nil && len(evs) > 0 {
+				logStore, restoreErr := session.NewSessionLogFromEvents(sID, evs)
+				if restoreErr != nil {
+					log.Printf("skip corrupt native session %s: %v", rawId, restoreErr)
+					continue
+				}
 				rec := &SessionRecord{
-					ID:        sID,
-					CreatedAt: evs[0].Time,
-					UpdatedAt: evs[len(evs)-1].Time,
-					Log:       session.NewSessionLog(sID),
-					Subs:      make(map[string]chan []byte),
-					Requests:  make(map[string]struct{}),
+					ID:         sID,
+					CreatedAt:  evs[0].Time,
+					UpdatedAt:  evs[len(evs)-1].Time,
+					Cwd:        files.Root(),
+					Model:      "deepseek-chat",
+					Permission: "auto",
+					Log:        logStore,
+					Subs:       make(map[string]chan []byte),
+					Requests:   make(map[string]struct{}),
 				}
 				for _, ev := range evs {
-					raw, err := ev.MarshalJSON()
-					if err == nil {
-						var parsed map[string]any
-						if json.Unmarshal(raw, &parsed) == nil {
-							rec.Events = append(rec.Events, parsed)
-						}
-					}
+					rec.Events = append(rec.Events, mapSessionEvent(ev))
 					if titleEv, ok := ev.Data.(session.SessionTitleData); ok && titleEv.Title != "" {
 						rec.Title = titleEv.Title
 					}
+					if modelEv, ok := ev.Data.(session.ModelSelectionData); ok && modelEv.Model != "" {
+						rec.Model = modelEv.Model
+					}
+					if presetEv, ok := ev.Data.(session.PresetChangeData); ok && presetEv.Preset != "" {
+						rec.Permission = presetEv.Preset
+					}
 				}
 				s.sessions[rawId] = rec
+				s.attachSession(rec)
+				s.recoverInterruptedSession(rec)
 			}
 		}
 	}
@@ -167,18 +213,32 @@ func (s *Server) getOrCreateSession(rawId string, cwd string) *SessionRecord {
 
 	sID := brand.NewSessionID(rawId)
 	now := time.Now()
+	cwd = s.nativeSessionCwd(cwd)
 	rec := &SessionRecord{
-		ID:        sID,
-		Cwd:       cwd,
-		Model:     "deepseek-chat",
-		CreatedAt: now,
-		UpdatedAt: now,
-		Log:       session.NewSessionLog(sID),
-		Subs:      make(map[string]chan []byte),
-		Requests:  make(map[string]struct{}),
+		ID:         sID,
+		Cwd:        cwd,
+		Model:      "deepseek-chat",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		Log:        session.NewSessionLog(sID),
+		Subs:       make(map[string]chan []byte),
+		Requests:   make(map[string]struct{}),
+		Permission: "auto",
 	}
 	s.sessions[rawId] = rec
+	s.attachSession(rec)
 	return rec
+}
+
+func (s *Server) nativeSessionCwd(requested string) string {
+	if requested != "" {
+		if resolved, err := s.files.Resolve(s.workspaceDir, requested); err == nil {
+			if info, statErr := os.Stat(resolved); statErr == nil && info.IsDir() {
+				return resolved
+			}
+		}
+	}
+	return s.workspaceDir
 }
 
 func (s *Server) archivedSessionIDs() []string {
@@ -502,17 +562,41 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 			rec.mu.Unlock()
 			return map[string]any{"requestId": reqId}, nil
 		}
-		if rec.Cancel != nil {
-			rec.mu.Unlock()
-			return nil, &RPCError{Code: "session/agent-busy", Message: "the session is already running a turn"}
-		}
-		ctx, cancel := context.WithCancel(context.Background())
-		rec.Cancel = cancel
+		wasRunning := rec.Cancel != nil
 		rec.RunID = reqId
 		rec.Requests[reqId] = struct{}{}
 		rec.mu.Unlock()
 
-		go s.executeTurn(ctx, rec, reqId, promptText)
+		rec.mu.Lock()
+		needsTitle := rec.Title == ""
+		rec.mu.Unlock()
+		if needsTitle {
+			title := strings.TrimSpace(promptText)
+			if runes := []rune(title); len(runes) > 24 {
+				title = string(runes[:24]) + "..."
+			}
+			_, _ = rec.Log.Append(session.SessionTitleData{Title: title, Source: "fallback"})
+		}
+		runtimeAgent := s.ensureAgent(rec)
+		rec.mu.Lock()
+		rec.Cancel = func() { runtimeAgent.Cancel(agent.CancelUser) }
+		rec.mu.Unlock()
+		var enqueueErr error
+		if wasRunning || runtimeAgent.Status() == agent.StatusRunning {
+			enqueueErr = runtimeAgent.FollowupRequest(promptText, reqId)
+		} else {
+			enqueueErr = runtimeAgent.RunRequest(promptText, reqId)
+		}
+		if enqueueErr != nil {
+			rec.mu.Lock()
+			delete(rec.Requests, reqId)
+			if !wasRunning {
+				rec.Cancel = nil
+				rec.RunID = ""
+			}
+			rec.mu.Unlock()
+			return nil, &RPCError{Code: "session/queue-full", Message: enqueueErr.Error()}
+		}
 		return map[string]any{"requestId": reqId}, nil
 
 	case "session/cancel":
@@ -525,10 +609,11 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 
 		if ok {
 			rec.mu.Lock()
-			if rec.Cancel != nil {
-				rec.Cancel()
-			}
+			cancel := rec.Cancel
 			rec.mu.Unlock()
+			if cancel != nil {
+				cancel()
+			}
 		}
 		return map[string]any{"accepted": true}, nil
 
@@ -542,10 +627,7 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		s.sessionsMu.RUnlock()
 
 		if ok {
-			rec.mu.Lock()
-			rec.Title = title
-			rec.mu.Unlock()
-			s.broadcastEvent(rec, "session/title", map[string]any{"title": title})
+			_, _ = rec.Log.Append(session.SessionTitleData{Title: title, Source: "user"})
 		}
 		return map[string]any{"title": title}, nil
 
@@ -563,7 +645,12 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		if ok {
 			rec.mu.Lock()
 			rec.Model = model
+			runtimeAgent := rec.Agent
 			rec.mu.Unlock()
+			if runtimeAgent != nil {
+				runtimeAgent.SetModel(provider, model, reasoningEffort)
+			}
+			_, _ = rec.Log.Append(session.ModelSelectionData{Provider: provider, Model: model, ReasoningEffort: reasoningEffort})
 		}
 
 		selected := map[string]any{
@@ -717,7 +804,36 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		return map[string]any{"writable": false, "namespaces": []any{}}, nil
 
 	case "pluginInventory/list":
-		return map[string]any{"plugins": []any{}}, nil
+		return map[string]any{"managementAvailable": false, "entries": []any{}, "agentPresets": []any{}}, nil
+
+	case "commands/execute":
+		sessionID, _ := args["agentId"].(string)
+		line, _ := args["line"].(string)
+		rec := s.sessionByID(sessionID)
+		if rec == nil {
+			return nil, &RPCError{Code: "session/not-found", Message: "session not found"}
+		}
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) == 2 && fields[0] == "/permission" {
+			preset := fields[1]
+			if preset != "read-only" && preset != "auto" && preset != "danger-full-access" {
+				return nil, &RPCError{Code: "gateway/arguments-invalid", Message: "unknown permission preset"}
+			}
+			_, _ = rec.Log.Append(session.PresetChangeData{Preset: preset})
+			return map[string]any{"commandId": uuid.MustV4(), "result": map[string]any{"kind": "success", "text": "Permission preset: " + preset}}, nil
+		}
+		return nil, &RPCError{Code: "commands/not-found", Message: "native engine does not implement this command"}
+
+	case "$events/result":
+		eventID, _ := args["eventId"].(string)
+		outcome, _ := args["outcome"].(map[string]any)
+		if eventID != "" && outcome != nil {
+			s.resolveHostEvent(eventID, outcome)
+		}
+		return map[string]any{}, nil
+
+	case "workspaceFiles/list", "workspaceFiles/stat", "workspaceFiles/read", "workspaceFiles/readBytes":
+		return s.dispatchWorkspaceRPC(endpoint, args)
 
 	case "session/search":
 		query, _ := args["query"].(string)
@@ -742,6 +858,12 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 	default:
 		return nil, &RPCError{Code: "gateway/method-not-found", Message: "native engine does not implement " + endpoint}
 	}
+}
+
+func (s *Server) sessionByID(sessionID string) *SessionRecord {
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	return s.sessions[sessionID]
 }
 
 // Broadcast an event to all subscribers of a session and persist it.
@@ -1094,6 +1216,8 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 	}
 	subscriptions := make(map[string]subscription)
 	workspaceSubscriptions := make(map[string]workspaceSubscription)
+	hostSubscriptions := make(map[string]string)
+	watchCancellations := make(map[string]context.CancelFunc)
 	removeSubscription := func(streamID string) {
 		if sub, ok := subscriptions[streamID]; ok {
 			delete(subscriptions, streamID)
@@ -1109,12 +1233,26 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 			close(sub.ch)
 			s.workspaceMu.Unlock()
 		}
+		if key, ok := hostSubscriptions[streamID]; ok {
+			delete(hostSubscriptions, streamID)
+			s.removeHostSubscriber(key)
+		}
+		if cancel, ok := watchCancellations[streamID]; ok {
+			delete(watchCancellations, streamID)
+			cancel()
+		}
 	}
 	defer func() {
 		for streamID := range subscriptions {
 			removeSubscription(streamID)
 		}
 		for streamID := range workspaceSubscriptions {
+			removeSubscription(streamID)
+		}
+		for streamID := range hostSubscriptions {
+			removeSubscription(streamID)
+		}
+		for streamID := range watchCancellations {
 			removeSubscription(streamID)
 		}
 	}()
@@ -1139,7 +1277,10 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 			payload, _ := frame["payload"].(map[string]any)
 
 			if endpoint == "$events" {
+				removeSubscription(streamId)
 				connectionClientID := uuid.MustV4()
+				key, updates, pending := s.addHostSubscriber()
+				hostSubscriptions[streamId] = key
 				_ = safeWrite(map[string]any{
 					"type":     "item",
 					"streamId": streamId,
@@ -1151,6 +1292,16 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 						},
 					},
 				})
+				for _, request := range pending {
+					_ = safeWrite(map[string]any{"type": "item", "streamId": streamId, "value": request})
+				}
+				go func(stream string, channel chan map[string]any) {
+					for update := range channel {
+						if err := safeWrite(map[string]any{"type": "item", "streamId": stream, "value": update}); err != nil {
+							return
+						}
+					}
+				}(streamId, updates)
 			} else if endpoint == "session/follow" {
 				removeSubscription(streamId)
 				var targetSessionId string
@@ -1299,6 +1450,27 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 				}(streamId, ch)
+			} else if endpoint == "workspaceFiles/changes" {
+				removeSubscription(streamId)
+				args, _ := payload["args"].(map[string]any)
+				if args == nil {
+					args = payload
+				}
+				sessionID, _ := args["workspaceFileScopeId"].(string)
+				path, _ := args["path"].(string)
+				watchCtx, cancel := context.WithCancel(r.Context())
+				watchCancellations[streamId] = cancel
+				go func(stream, targetSession, targetPath string) {
+					err := s.watchWorkspace(watchCtx, targetSession, targetPath, func(value map[string]any) error {
+						return safeWrite(map[string]any{"type": "item", "streamId": stream, "value": value})
+					})
+					if err != nil && watchCtx.Err() == nil {
+						_ = safeWrite(map[string]any{
+							"type": "error", "streamId": stream,
+							"error": map[string]any{"code": string(nativefs.Code(err)), "message": err.Error()},
+						})
+					}
+				}(streamId, sessionID, path)
 			} else {
 				_ = safeWrite(map[string]any{
 					"type": "error", "streamId": streamId,
@@ -1372,7 +1544,14 @@ func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
 func main() {
 	portFlag := flag.Int("port", 3080, "server port")
 	homeFlag := flag.String("home", "", "dsh home directory")
+	workspaceFlag := flag.String("workspace", "", "native workspace root")
+	versionFlag := flag.Bool("version", false, "print engine build information")
 	flag.Parse()
+	if *versionFlag {
+		encoded, _ := json.Marshal(currentBuildInfo())
+		fmt.Println(string(encoded))
+		return
+	}
 
 	homeDir := *homeFlag
 	if homeDir == "" {
@@ -1395,7 +1574,14 @@ func main() {
 	}
 	actualPort := ln.Addr().(*net.TCPAddr).Port
 
-	server, err := newServer(actualPort, homeDir)
+	workspaceDir := *workspaceFlag
+	if workspaceDir == "" {
+		workspaceDir = os.Getenv("DSH_WORKSPACE_ROOT")
+	}
+	if workspaceDir == "" {
+		workspaceDir = filepath.Join(homeDir, "workspace")
+	}
+	server, err := newServerWithWorkspace(actualPort, homeDir, workspaceDir)
 	if err != nil {
 		log.Fatalf("failed to initialize server: %v", err)
 	}
@@ -1403,7 +1589,9 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", server.handleRoot)
 	mux.HandleFunc("/api/remote.mux", server.handleMux)
+	mux.HandleFunc("/api/file", server.handleFile)
 	mux.HandleFunc("/api/", server.handleRPC)
+	mux.HandleFunc("/dsh-go/v1/info", server.handleBuildInfo)
 	mux.HandleFunc("/dsh-go/v1/sessions/deletion", server.handleSessionDeletionCapability)
 	mux.HandleFunc("/dsh-go/v1/sessions/delete", server.handleSessionDelete)
 
@@ -1428,4 +1616,5 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_ = httpServer.Shutdown(ctx)
+	_ = server.dbStore.Close()
 }

@@ -44,6 +44,7 @@ const (
 	EventAssistantReasoning EventType = "assistant/reasoning"
 	EventInjectionContext   EventType = "injection/context"
 	EventSessionTitle       EventType = "session/title"
+	EventModelSelection     EventType = "model/selection"
 )
 
 const (
@@ -69,7 +70,7 @@ const (
 	EventRequestContext    EventType = "request/context"
 	EventApprovalAsked     EventType = "approval/asked"
 	EventApprovalDecided   EventType = "approval/decided"
-	EventPresetChange      EventType = "permission/preset-change"
+	EventPresetChange      EventType = "permission/preset"
 	EventAgentPresetChange EventType = "agent/preset-change"
 	EventCommandRun        EventType = "command/run"
 	EventCommandDone       EventType = "command/done"
@@ -111,7 +112,7 @@ var AllEventTypes = []EventType{
 	EventTurnStart, EventTurnEnd, EventTurnStopping, EventStepStart, EventStepEnd,
 	EventAgentError, EventAgentPreStep, EventAgentRequest, EventAgentStatus, EventAgentInboxSpliced,
 	EventUserMessage, EventAssistantMessage, EventAssistantChunk, EventAssistantReasoning,
-	EventInjectionContext, EventSessionTitle,
+	EventInjectionContext, EventSessionTitle, EventModelSelection,
 	EventToolCall, EventToolResult, EventToolError, EventToolObserved, EventToolPresentation,
 	EventPlanMode, EventPlanApproval, EventGoalChange, EventGoalRound, EventTodoWrite,
 	EventEndSeed, EventPlanUpdate,
@@ -241,9 +242,10 @@ type InboxSplicedData struct {
 func (InboxSplicedData) EventType() EventType { return EventAgentInboxSpliced }
 
 type UserMessageData struct {
-	Content string `json:"content"`
-	Source  string `json:"source,omitempty"` // e.g. "user" / "reference" / "injected"
-	Refs    []any  `json:"refs,omitempty"`
+	Content   string `json:"content"`
+	Source    string `json:"source,omitempty"` // e.g. "user" / "reference" / "injected"
+	RequestID string `json:"requestId,omitempty"`
+	Refs      []any  `json:"refs,omitempty"`
 }
 
 func (u *UserMessageData) UnmarshalJSON(data []byte) error {
@@ -276,6 +278,18 @@ func (u *UserMessageData) UnmarshalJSON(data []byte) error {
 			u.Source = string(sRaw)
 		}
 	}
+	if requestRaw, ok := raw["requestId"]; ok {
+		_ = json.Unmarshal(requestRaw, &u.RequestID)
+	}
+	// The DSH wire format nests the optimistic prompt id under source.rpcId.
+	if u.RequestID == "" {
+		if sourceRaw, ok := raw["source"]; ok {
+			var source map[string]any
+			if json.Unmarshal(sourceRaw, &source) == nil {
+				u.RequestID, _ = source["rpcId"].(string)
+			}
+		}
+	}
 	if rRaw, ok := raw["refs"]; ok {
 		_ = json.Unmarshal(rRaw, &u.Refs)
 	}
@@ -284,9 +298,21 @@ func (u *UserMessageData) UnmarshalJSON(data []byte) error {
 
 func (UserMessageData) EventType() EventType { return EventUserMessage }
 
+type AssistantToolCall struct {
+	ID    string         `json:"id"`
+	Name  string         `json:"name"`
+	Input map[string]any `json:"input,omitempty"`
+}
+
 type AssistantMessageData struct {
-	Content     string   `json:"content"`
-	ToolCallIDs []string `json:"toolCallIds,omitempty"`
+	Turn         uint64              `json:"turn,omitempty"`
+	Step         uint64              `json:"step,omitempty"`
+	Content      string              `json:"content"`
+	Reasoning    string              `json:"reasoning,omitempty"`
+	ToolCallIDs  []string            `json:"toolCallIds,omitempty"`
+	ToolCalls    []AssistantToolCall `json:"toolCalls,omitempty"`
+	PromptTokens int                 `json:"promptTokens,omitempty"`
+	OutputTokens int                 `json:"outputTokens,omitempty"`
 }
 
 func (a *AssistantMessageData) UnmarshalJSON(data []byte) error {
@@ -335,6 +361,12 @@ func (a *AssistantMessageData) UnmarshalJSON(data []byte) error {
 	if tcRaw, ok := raw["toolCallIds"]; ok {
 		_ = json.Unmarshal(tcRaw, &a.ToolCallIDs)
 	}
+	_ = json.Unmarshal(raw["turn"], &a.Turn)
+	_ = json.Unmarshal(raw["step"], &a.Step)
+	_ = json.Unmarshal(raw["reasoning"], &a.Reasoning)
+	_ = json.Unmarshal(raw["toolCalls"], &a.ToolCalls)
+	_ = json.Unmarshal(raw["promptTokens"], &a.PromptTokens)
+	_ = json.Unmarshal(raw["outputTokens"], &a.OutputTokens)
 	return nil
 }
 
@@ -361,12 +393,23 @@ type InjectionContextData struct {
 func (InjectionContextData) EventType() EventType { return EventInjectionContext }
 
 type SessionTitleData struct {
-	Title string `json:"title"`
+	Title  string `json:"title"`
+	Source string `json:"source,omitempty"`
 }
 
 func (SessionTitleData) EventType() EventType { return EventSessionTitle }
 
+type ModelSelectionData struct {
+	Provider        string `json:"provider"`
+	Model           string `json:"model"`
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+}
+
+func (ModelSelectionData) EventType() EventType { return EventModelSelection }
+
 type ToolCallData struct {
+	Turn   uint64           `json:"turn,omitempty"`
+	Step   uint64           `json:"step,omitempty"`
 	CallID brand.ToolCallID `json:"callId"`
 	Tool   string           `json:"tool"`
 	Input  json.RawMessage  `json:"input,omitempty"`
@@ -375,6 +418,8 @@ type ToolCallData struct {
 func (ToolCallData) EventType() EventType { return EventToolCall }
 
 type ToolResultData struct {
+	Turn      uint64           `json:"turn,omitempty"`
+	Step      uint64           `json:"step,omitempty"`
 	CallID    brand.ToolCallID `json:"callId"`
 	IsError   bool             `json:"isError,omitempty"`
 	Output    string           `json:"output,omitempty"`
@@ -487,6 +532,7 @@ func (RequestContextData) EventType() EventType { return EventRequestContext }
 type ApprovalRequestIDData struct {
 	RequestID brand.ApprovalRequestID `json:"requestId"`
 	Tool      string                  `json:"tool,omitempty"`
+	CallID    string                  `json:"callId,omitempty"`
 	Summary   string                  `json:"summary,omitempty"`
 }
 
@@ -495,6 +541,7 @@ func (ApprovalRequestIDData) EventType() EventType { return EventApprovalAsked }
 type ApprovalDecidedData struct {
 	RequestID brand.ApprovalRequestID `json:"requestId"`
 	Allowed   bool                    `json:"allowed"`
+	Outcome   string                  `json:"outcome,omitempty"`
 }
 
 func (ApprovalDecidedData) EventType() EventType { return EventApprovalDecided }
@@ -711,6 +758,8 @@ func newEventData(t EventType) (EventData, error) {
 		return InjectionContextData{}, nil
 	case EventSessionTitle:
 		return SessionTitleData{}, nil
+	case EventModelSelection:
+		return ModelSelectionData{}, nil
 	case EventToolCall:
 		return ToolCallData{}, nil
 	case EventToolResult:
@@ -926,6 +975,9 @@ type SessionLog struct {
 	invariants *invariant.Registry
 
 	folder *IncrementalFolder
+
+	listeners      map[uint64]func(SessionEvent)
+	nextListenerID uint64
 }
 
 //
@@ -990,12 +1042,60 @@ func NewSessionLog(id brand.SessionID) *SessionLog {
 		sessionID:  id,
 		state:      sessionState{toolCalls: map[string]bool{}},
 		invariants: invariant.NewRegistry(),
+		listeners:  map[uint64]func(SessionEvent){},
 	}
 
 	_ = sl.invariants.Register("pkg/session", sl.checkTurnPairing)
 	_ = sl.invariants.Register("pkg/session", sl.checkStepPairing)
 	_ = sl.invariants.Register("pkg/session", sl.checkToolCallResultPairing)
 	return sl
+}
+
+// NewSessionLogFromEvents restores a durable log without changing its event
+// sequence numbers or timestamps. The same state-machine checks used for live
+// appends are applied so a corrupt history fails closed before an Agent starts.
+func NewSessionLogFromEvents(id brand.SessionID, events []SessionEvent) (*SessionLog, error) {
+	sl := NewSessionLog(id)
+	for i, ev := range events {
+		expected := uint64(i + 1)
+		if ev.Seq != expected {
+			return nil, fmt.Errorf("session: restore expected seq %d, got %d", expected, ev.Seq)
+		}
+		if ev.Type != ev.Data.EventType() {
+			return nil, fmt.Errorf("session: restore type %q does not match data type %q", ev.Type, ev.Data.EventType())
+		}
+		if err := sl.applyState(ev); err != nil {
+			return nil, fmt.Errorf("session: restore seq %d: %w", ev.Seq, err)
+		}
+		sl.events = append(sl.events, ev)
+		sl.seq = ev.Seq
+		if ev.Time.After(sl.state.lastTime) {
+			sl.state.lastTime = ev.Time
+		}
+	}
+	return sl, nil
+}
+
+// OnAppend observes future durable events. Listeners run synchronously after
+// the log lock is released; this makes persistence and stream fan-out ordered
+// without permitting callbacks to deadlock SessionLog.
+func (sl *SessionLog) OnAppend(listener func(SessionEvent)) (cancel func()) {
+	if listener == nil {
+		return func() {}
+	}
+	sl.mu.Lock()
+	sl.nextListenerID++
+	id := sl.nextListenerID
+	sl.listeners[id] = listener
+	sl.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			sl.mu.Lock()
+			delete(sl.listeners, id)
+			sl.mu.Unlock()
+		})
+	}
 }
 
 func (sl *SessionLog) SessionID() brand.SessionID {
@@ -1063,7 +1163,6 @@ func (sl *SessionLog) OpenStep() (uint64, bool) {
 
 func (sl *SessionLog) Append(data EventData) (uint64, error) {
 	sl.mu.Lock()
-	defer sl.mu.Unlock()
 
 	now := time.Now()
 	if !sl.state.lastTime.IsZero() && now.Before(sl.state.lastTime) {
@@ -1080,6 +1179,7 @@ func (sl *SessionLog) Append(data EventData) (uint64, error) {
 
 	if err := sl.applyState(ev); err != nil {
 		sl.seq--
+		sl.mu.Unlock()
 		return 0, err
 	}
 
@@ -1088,6 +1188,14 @@ func (sl *SessionLog) Append(data EventData) (uint64, error) {
 
 	if sl.folder != nil {
 		sl.folder.Append(ev)
+	}
+	listeners := make([]func(SessionEvent), 0, len(sl.listeners))
+	for _, listener := range sl.listeners {
+		listeners = append(listeners, listener)
+	}
+	sl.mu.Unlock()
+	for _, listener := range listeners {
+		listener(ev)
 	}
 	return ev.Seq, nil
 }
