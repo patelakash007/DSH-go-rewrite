@@ -2034,6 +2034,7 @@ func main() {
 	mux.HandleFunc("/api/remote.mux", server.handleMux)
 	mux.HandleFunc("/api/file", server.handleFile)
 	mux.HandleFunc("/api/session/uploadFileBinary", server.handleUploadBinary)
+	mux.HandleFunc("/api/session.export", server.handleSessionExport)
 	mux.HandleFunc("/api/", server.handleRPC)
 	mux.HandleFunc("/dsh-go/v1/info", server.handleBuildInfo)
 	mux.HandleFunc("/dsh-go/v1/sessions/deletion", server.handleSessionDeletionCapability)

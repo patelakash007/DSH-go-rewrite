@@ -1,9 +1,12 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -49,6 +52,7 @@ func setupTestServer(t *testing.T) (*Server, *httptest.Server, func()) {
 	mux.HandleFunc("/api/remote.mux", server.handleMux)
 	mux.HandleFunc("/api/file", server.handleFile)
 	mux.HandleFunc("/api/session/uploadFileBinary", server.handleUploadBinary)
+	mux.HandleFunc("/api/session.export", server.handleSessionExport)
 	mux.HandleFunc("/api/", server.handleRPC)
 	mux.HandleFunc("/dsh-go/v1/info", server.handleBuildInfo)
 	mux.HandleFunc("/dsh-go/v1/sessions/deletion", server.handleSessionDeletionCapability)
@@ -756,6 +760,48 @@ func (a *blockingAdapter) Chat(ctx context.Context, _ llm.ChatRequest, callback 
 	}
 	callback(llm.StreamChunk{Kind: llm.ChunkText, Text: "reply"})
 	return llm.Usage{PromptTokens: 1, CompletionTokens: 1}, nil
+}
+
+func TestNativeSessionExportArchive(t *testing.T) {
+	server, ts, cleanup := setupTestServer(t)
+	defer cleanup()
+	rec := server.getOrCreateSession("export-session", "")
+	_, _ = rec.Log.Append(session.SessionTitleData{Title: "Exported session", Source: "user"})
+	upload, err := server.uploads.put(rec.ID.Raw(), "export.txt", strings.NewReader("export attachment"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := getAuthCookie(t, server, ts)
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/session.export?sessionId="+rec.ID.Raw()+"&includeDescendants=true", nil)
+	req.AddCookie(cookie)
+	response, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("export status = %d", response.StatusCode)
+	}
+	if response.Header.Get("Content-Type") != "application/zip" {
+		t.Fatalf("export content type = %q", response.Header.Get("Content-Type"))
+	}
+	data, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, file := range archive.File {
+		names[file.Name] = true
+	}
+	sessionPath := "sessions/export-session/session.json"
+	attachmentPath := "sessions/export-session/attachments/" + upload.Name
+	if !names[sessionPath] || !names[attachmentPath] {
+		t.Fatalf("export entries = %v", names)
+	}
 }
 
 func TestNativeAccountAndAppAuthStates(t *testing.T) {
