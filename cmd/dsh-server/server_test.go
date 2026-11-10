@@ -21,6 +21,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/JopenChen/dsh-go/pkg/brand"
+	"github.com/JopenChen/dsh-go/pkg/goal"
 	"github.com/JopenChen/dsh-go/pkg/llm"
 	"github.com/JopenChen/dsh-go/pkg/session"
 )
@@ -775,8 +776,15 @@ func TestNativeSettingsAndCommandCatalogue(t *testing.T) {
 		t.Fatalf("new session permission = %q", rec.Permission)
 	}
 	commands, rpcErr := server.dispatchRPC(context.Background(), "commands/list", map[string]any{"agentId": rec.ID.Raw()})
-	if rpcErr != nil || len(commands.([]map[string]any)) != 1 || commands.([]map[string]any)[0]["name"] != "permission" {
+	if rpcErr != nil || len(commands.([]map[string]any)) != 4 {
 		t.Fatalf("commands = %#v, %+v", commands, rpcErr)
+	}
+	names := make([]string, 0, len(commands.([]map[string]any)))
+	for _, command := range commands.([]map[string]any) {
+		names = append(names, command["name"].(string))
+	}
+	if !strings.Contains(strings.Join(names, ","), "permission") || !strings.Contains(strings.Join(names, ","), "compact") {
+		t.Fatalf("command names = %v", names)
 	}
 	if _, err := os.Stat(server.settings.path); err != nil {
 		t.Fatalf("settings document not persisted: %v", err)
@@ -1163,6 +1171,61 @@ func TestNativeAccountAndAppAuthStates(t *testing.T) {
 	inspect, rpcErr := server.dispatchRPC(context.Background(), "pluginManager/inspect", map[string]any{"spec": "missing"})
 	if rpcErr != nil || inspect.(map[string]any)["status"] != "refused" {
 		t.Fatalf("plugin inspect = %#v, %+v", inspect, rpcErr)
+	}
+}
+
+func TestNativePlanAndGoalCommands(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	rec := server.getOrCreateSession("command-session", "")
+	run := func(line string) map[string]any {
+		t.Helper()
+		result, rpcErr := server.dispatchRPC(context.Background(), "commands/execute", map[string]any{
+			"agentId": rec.ID.Raw(), "line": line,
+		})
+		if rpcErr != nil {
+			t.Fatalf("%s: %+v", line, rpcErr)
+		}
+		value, _ := result.(map[string]any)["result"].(map[string]any)
+		return value
+	}
+	if result := run("/plan"); result["kind"] != "success" {
+		t.Fatalf("/plan = %#v", result)
+	}
+	planMode := ""
+	for _, event := range rec.Log.Events() {
+		if data, ok := event.Data.(session.PlanModeData); ok {
+			planMode = data.Mode
+		}
+	}
+	if planMode != "on" {
+		t.Fatalf("plan mode = %q", planMode)
+	}
+	run("/plan off")
+	if result := run("/goal ship the native engine"); result["kind"] != "success" {
+		t.Fatalf("/goal = %#v", result)
+	}
+	if current, present := goal.FromLog(rec.Log); !present || current.Description != "ship the native engine" {
+		t.Fatalf("goal = %#v, %v", current, present)
+	}
+	if result := run("/goal"); !strings.Contains(result["text"].(string), "ship the native engine") {
+		t.Fatalf("/goal summary = %#v", result)
+	}
+	run("/goal pause")
+	if current, _ := goal.FromLog(rec.Log); current.Phase != goal.PhasePaused {
+		t.Fatalf("paused goal = %#v", current)
+	}
+	run("/goal resume")
+	if current, _ := goal.FromLog(rec.Log); current.Phase != goal.PhaseActive {
+		t.Fatalf("resumed goal = %#v", current)
+	}
+	run("/goal edit ship the standalone engine")
+	if current, _ := goal.FromLog(rec.Log); current.Description != "ship the standalone engine" {
+		t.Fatalf("edited goal = %#v", current)
+	}
+	run("/goal clear")
+	if _, present := goal.FromLog(rec.Log); present {
+		t.Fatal("goal was not cleared")
 	}
 }
 

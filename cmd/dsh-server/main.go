@@ -1006,9 +1006,7 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		return []any{}, nil
 
 	case "commands/list":
-		return []map[string]any{
-			{"name": "permission", "description": "Change the native tool permission preset", "definitionId": "permission", "input": map[string]any{"hint": "read-only | auto | danger-full-access"}},
-		}, nil
+		return nativeCommandCatalog(), nil
 
 	case "skills/list":
 		return s.listSkills(args)
@@ -1064,29 +1062,7 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		if rec == nil {
 			return nil, &RPCError{Code: "session/not-found", Message: "session not found"}
 		}
-		fields := strings.Fields(strings.TrimSpace(line))
-		if len(fields) == 2 && fields[0] == "/permission" {
-			preset := fields[1]
-			if preset != "read-only" && preset != "auto" && preset != "danger-full-access" {
-				return nil, &RPCError{Code: "gateway/arguments-invalid", Message: "unknown permission preset"}
-			}
-			_, _ = rec.Log.Append(session.PresetChangeData{Preset: preset})
-			return map[string]any{"commandId": uuid.MustV4(), "result": map[string]any{"kind": "success", "text": "Permission preset: " + preset}}, nil
-		}
-		if len(fields) == 1 && fields[0] == "/compact" {
-			text, err := s.compactSession(ctx, rec)
-			if err != nil {
-				return map[string]any{
-					"commandId": uuid.MustV4(),
-					"result":    map[string]any{"kind": "error", "text": err.Error()},
-				}, nil
-			}
-			return map[string]any{
-				"commandId": uuid.MustV4(),
-				"result":    map[string]any{"kind": "success", "text": text},
-			}, nil
-		}
-		return nil, &RPCError{Code: "commands/not-found", Message: "native engine does not implement this command"}
+		return s.executeNativeCommand(ctx, rec, line)
 
 	case "$events/result":
 		eventID, _ := args["eventId"].(string)
