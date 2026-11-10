@@ -762,6 +762,109 @@ func (a *blockingAdapter) Chat(ctx context.Context, _ llm.ChatRequest, callback 
 	return llm.Usage{PromptTokens: 1, CompletionTokens: 1}, nil
 }
 
+func TestNativeSubagentLifecycle(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	server.adapter = &recordingAdapter{requests: make(chan llm.ChatRequest, 32)}
+	parent := server.getOrCreateSession("subagent-parent", "")
+
+	result, err := server.spawnSubagentFromTool(context.Background(), parent.ID.Raw(), map[string]any{
+		"prompt": "summarize the workspace", "label": "Workspace summary", "mode": "one-shot",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spawned := result.(map[string]any)
+	childID := spawned["sessionId"].(string)
+	if spawned["status"] != "completed" || spawned["output"] != "native reply" {
+		t.Fatalf("spawn result = %#v", spawned)
+	}
+	child := server.sessionByID(childID)
+	if child == nil || child.ParentSessionID != parent.ID.Raw() || child.Origin != "subagent" || child.SubagentMode != "one-shot" {
+		t.Fatalf("child = %#v", child)
+	}
+	catalog := subagentCatalogProjection(parent)
+	if len(catalog) != 1 || catalog[0]["id"] != childID || catalog[0]["mode"] != "one-shot" || catalog[0]["label"] != "Workspace summary" {
+		t.Fatalf("catalog = %#v", catalog)
+	}
+	identity := subagentIdentityProjection(child)
+	if identity["mode"] != "one-shot" || identity["label"] != "Workspace summary" {
+		t.Fatalf("identity = %#v", identity)
+	}
+	timing := subagentTimingProjection(child)
+	if timing["lastTurnCompleted"] != true {
+		t.Fatalf("timing = %#v", timing)
+	}
+
+	if _, rpcErr := server.dispatchRPC(context.Background(), "subagents/prompt", map[string]any{
+		"request": map[string]any{
+			"parentSessionId": parent.ID.Raw(), "childSessionId": childID,
+			"content": []any{map[string]any{"type": "text", "text": "again"}},
+		},
+	}); rpcErr == nil || rpcErr.Code != "subagent/not-resumable" {
+		t.Fatalf("one-shot prompt = %+v", rpcErr)
+	}
+	if _, rpcErr := server.dispatchRPC(context.Background(), "session/prompt", map[string]any{
+		"request": map[string]any{
+			"sessionId": childID,
+			"content":   []any{map[string]any{"type": "text", "text": "plain address"}},
+		},
+	}); rpcErr == nil || rpcErr.Code != "session/agent-busy" {
+		t.Fatalf("plain child prompt = %+v", rpcErr)
+	}
+
+	continuable, err := server.spawnSubagentFromTool(context.Background(), parent.ID.Raw(), map[string]any{
+		"prompt": "first continuable turn", "label": "Continuable child", "mode": "continuable",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	continuableID := continuable.(map[string]any)["sessionId"].(string)
+	prompted, rpcErr := server.dispatchRPC(context.Background(), "subagents/prompt", map[string]any{
+		"request": map[string]any{
+			"parentSessionId": parent.ID.Raw(), "childSessionId": continuableID,
+			"requestId": "subagent-followup",
+			"content":   []any{map[string]any{"type": "text", "text": "second turn"}},
+		},
+	})
+	if rpcErr != nil || prompted.(map[string]any)["requestId"] != "subagent-followup" {
+		t.Fatalf("continuable prompt = %#v, %+v", prompted, rpcErr)
+	}
+	continuableRec := server.sessionByID(continuableID)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		continuableRec.mu.Lock()
+		running := continuableRec.Cancel != nil
+		continuableRec.mu.Unlock()
+		if !running {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, rpcErr := server.dispatchRPC(context.Background(), "subagents/interruptByParent", map[string]any{
+		"request": map[string]any{
+			"parentSessionId": parent.ID.Raw(), "childSessionId": continuableID, "mode": "continuable",
+		},
+	}); rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	page, rpcErr := server.dispatchRPC(context.Background(), "session/page", map[string]any{
+		"request": map[string]any{
+			"address": map[string]any{
+				"kind": "subagent", "parentSessionId": parent.ID.Raw(),
+				"childSessionId": continuableID, "mode": "continuable",
+			},
+			"throughSeq": 100,
+		},
+	})
+	if rpcErr != nil || len(page.(map[string]any)["records"].([]map[string]any)) == 0 {
+		t.Fatalf("subagent page = %#v, %+v", page, rpcErr)
+	}
+	if len(subagentCatalogProjection(parent)) != 2 {
+		t.Fatalf("catalog after second child = %#v", subagentCatalogProjection(parent))
+	}
+}
+
 func TestNativeSessionExportArchive(t *testing.T) {
 	server, ts, cleanup := setupTestServer(t)
 	defer cleanup()

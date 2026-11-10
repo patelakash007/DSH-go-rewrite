@@ -71,7 +71,20 @@ type SessionRecord struct {
 	attemptStep     uint64
 	attemptEnded    bool
 	Queue           []queuedPrompt
-	mu              sync.Mutex
+
+	ParentSessionID string
+	Origin          string
+	SubagentMode    string
+	SubagentLabel   string
+	SubagentCreated time.Time
+	SubagentCatalog []session.SubagentCatalogEntry
+
+	subagentSettledMs   int64
+	subagentActiveSince time.Time
+	subagentActiveUntil time.Time
+	subagentLastDone    *bool
+
+	mu sync.Mutex
 }
 
 type queuedPrompt struct {
@@ -252,14 +265,31 @@ func newServerWithWorkspace(port int, homeDir, workspaceDir string) (*Server, er
 				}
 				for _, ev := range evs {
 					rec.Events = append(rec.Events, mapSessionEvent(ev))
-					if titleEv, ok := ev.Data.(session.SessionTitleData); ok && titleEv.Title != "" {
-						rec.Title = titleEv.Title
-					}
-					if modelEv, ok := ev.Data.(session.ModelSelectionData); ok && modelEv.Model != "" {
-						rec.Model = modelEv.Model
-					}
-					if presetEv, ok := ev.Data.(session.PresetChangeData); ok && presetEv.Preset != "" {
-						rec.Permission = presetEv.Preset
+					switch data := ev.Data.(type) {
+					case session.SessionTitleData:
+						if data.Title != "" {
+							rec.Title = data.Title
+						}
+					case session.ModelSelectionData:
+						if data.Model != "" {
+							rec.Model = data.Model
+						}
+						if data.Provider != "" {
+							rec.Provider = data.Provider
+						}
+					case session.PresetChangeData:
+						if data.Preset != "" {
+							rec.Permission = data.Preset
+						}
+					case session.SubagentDescriptorData:
+						rec.Origin = "subagent"
+						rec.SubagentMode = data.Mode
+						rec.SubagentLabel = data.Label
+						if data.ParentSessionID != "" {
+							rec.ParentSessionID = data.ParentSessionID
+						}
+					case session.SubagentCatalogData:
+						rec.SubagentCatalog = append([]session.SubagentCatalogEntry(nil), data.Entries...)
 					}
 				}
 				s.sessions[rawId] = rec
@@ -496,7 +526,28 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 			if providerName == "" {
 				providerName = "deepseek"
 			}
-			items = append(items, map[string]any{
+			values := map[string]any{
+				"title": title,
+				"permissions": map[string]any{
+					"currentValue": "auto",
+				},
+				"modelSelection": map[string]any{
+					"lastUsed": map[string]any{
+						"provider": providerName,
+						"model":    modelName,
+					},
+					"next": map[string]any{
+						"provider": providerName,
+						"model":    modelName,
+					},
+				},
+				"sessionListMetadata": map[string]any{
+					"blank": len(rec.Events) == 0,
+				},
+				"goal": goalProjection(rec),
+			}
+			addSubagentProjectionsLocked(rec, values)
+			item := map[string]any{
 				"sessionId":      rec.ID.Raw(),
 				"updatedAt":      rec.UpdatedAt.UnixMilli(),
 				"running":        rec.Cancel != nil,
@@ -505,28 +556,16 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 				"cwd":            rec.Cwd,
 				"projections": map[string]any{
 					"asOfSeq": asOfSeq,
-					"values": map[string]any{
-						"title": title,
-						"permissions": map[string]any{
-							"currentValue": "auto",
-						},
-						"modelSelection": map[string]any{
-							"lastUsed": map[string]any{
-								"provider": providerName,
-								"model":    modelName,
-							},
-							"next": map[string]any{
-								"provider": providerName,
-								"model":    modelName,
-							},
-						},
-						"sessionListMetadata": map[string]any{
-							"blank": len(rec.Events) == 0,
-						},
-						"goal": goalProjection(rec),
-					},
+					"values":  values,
 				},
-			})
+			}
+			if rec.ParentSessionID != "" {
+				item["parentSessionId"] = rec.ParentSessionID
+			}
+			if rec.Origin != "" {
+				item["origin"] = rec.Origin
+			}
+			items = append(items, item)
 			rec.mu.Unlock()
 		}
 		sort.Slice(items, func(i, j int) bool {
@@ -602,32 +641,31 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 			providerName = "deepseek"
 		}
 		inbox := inboxProjectionLocked(rec)
+		values := map[string]any{
+			"inbox": inbox,
+			"title": title,
+			"permissions": map[string]any{
+				"currentValue": "auto",
+			},
+			"modelSelection": map[string]any{
+				"lastUsed": map[string]any{
+					"provider": providerName,
+					"model":    modelName,
+				},
+				"next": map[string]any{
+					"provider": providerName,
+					"model":    modelName,
+				},
+			},
+			"sessionListMetadata": map[string]any{
+				"blank": isBlank,
+			},
+			"goal": goalProjection(rec),
+		}
+		addSubagentProjectionsLocked(rec, values)
 		rec.mu.Unlock()
 
-		return map[string]any{
-			"asOfSeq": asOfSeq,
-			"values": map[string]any{
-				"inbox": inbox,
-				"title": title,
-				"permissions": map[string]any{
-					"currentValue": "auto",
-				},
-				"modelSelection": map[string]any{
-					"lastUsed": map[string]any{
-						"provider": providerName,
-						"model":    modelName,
-					},
-					"next": map[string]any{
-						"provider": providerName,
-						"model":    modelName,
-					},
-				},
-				"sessionListMetadata": map[string]any{
-					"blank": isBlank,
-				},
-				"goal": goalProjection(rec),
-			},
-		}, nil
+		return map[string]any{"asOfSeq": asOfSeq, "values": values}, nil
 
 	case "session/prompt":
 		reqMap, _ := args["request"].(map[string]any)
@@ -642,6 +680,9 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		s.sessionsMu.RUnlock()
 		if !ok {
 			rec = s.getOrCreateSession(sIDStr, "")
+		}
+		if plainSubagentAddress(reqMap, rec) {
+			return nil, &RPCError{Code: "session/agent-busy", Message: "subagent sessions take prompts through their parent"}
 		}
 
 		// Extract prompt text and resolve staged files into app-owned workspace
@@ -743,6 +784,9 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		s.sessionsMu.RUnlock()
 
 		if ok {
+			if plainSubagentAddress(reqMap, rec) {
+				return nil, &RPCError{Code: "session/agent-busy", Message: "subagent sessions are cancelled through their parent"}
+			}
 			rec.mu.Lock()
 			cancel := rec.Cancel
 			rec.mu.Unlock()
@@ -824,15 +868,7 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 
 	case "session/page":
 		reqMap, _ := args["request"].(map[string]any)
-		var sIDStr string
-		if reqMap != nil {
-			sIDStr, _ = reqMap["sessionId"].(string)
-			if sIDStr == "" {
-				if addr, ok := reqMap["address"].(map[string]any); ok {
-					sIDStr, _ = addr["sessionId"].(string)
-				}
-			}
-		}
+		sIDStr := sessionAddressID(reqMap)
 		if sIDStr == "" {
 			sIDStr, _ = args["sessionId"].(string)
 		}
@@ -843,6 +879,9 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 
 		if !ok {
 			return map[string]any{"records": []any{}, "hasMore": false}, nil
+		}
+		if plainSubagentAddress(reqMap, rec) {
+			return nil, &RPCError{Code: "session/agent-busy", Message: "subagent sessions are read through their parent"}
 		}
 
 		rec.mu.Lock()
@@ -1068,6 +1107,9 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 
 	case "appAuth/list", "appAuth/begin", "appAuth/poll", "appAuth/answer", "appAuth/cancel", "appAuth/signOut":
 		return s.dispatchAppAuthRPC(endpoint, args)
+
+	case "subagents/prompt", "subagents/interruptByParent":
+		return s.dispatchSubagentRPC(endpoint, args)
 
 	case "dynamicCordisRunner/inventory":
 		return []any{}, nil
@@ -1633,21 +1675,17 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 					req, _ = payload["request"].(map[string]any)
 				}
 				if req != nil {
-					targetSessionId, _ = req["sessionId"].(string)
+					targetSessionId = sessionAddressID(req)
 					if targetSessionId == "" {
-						if addr, ok := req["address"].(map[string]any); ok {
-							targetSessionId, _ = addr["sessionId"].(string)
-						} else if addrStr, ok := req["address"].(string); ok {
+						if addrStr, ok := req["address"].(string); ok {
 							targetSessionId = addrStr
 						}
 					}
 				}
 				if targetSessionId == "" && args != nil {
-					targetSessionId, _ = args["sessionId"].(string)
+					targetSessionId = sessionAddressID(args)
 					if targetSessionId == "" {
-						if addr, ok := args["address"].(map[string]any); ok {
-							targetSessionId, _ = addr["sessionId"].(string)
-						} else if addrStr, ok := args["address"].(string); ok {
+						if addrStr, ok := args["address"].(string); ok {
 							targetSessionId = addrStr
 						}
 					}
@@ -1661,6 +1699,13 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 				}
 
 				rec := s.getOrCreateSession(targetSessionId, "")
+				if plainSubagentAddress(req, rec) {
+					_ = safeWrite(map[string]any{
+						"type": "error", "streamId": streamId,
+						"error": map[string]any{"code": "session/agent-busy", "message": "subagent sessions are read through their parent"},
+					})
+					continue
+				}
 				rec.mu.Lock()
 				records := make([]map[string]any, len(rec.Events))
 				for i, ev := range rec.Events {
@@ -1685,6 +1730,28 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 					providerName = "deepseek"
 				}
 				inbox := inboxProjectionLocked(rec)
+				values := map[string]any{
+					"inbox": inbox,
+					"title": title,
+					"permissions": map[string]any{
+						"currentValue": "auto",
+					},
+					"modelSelection": map[string]any{
+						"lastUsed": map[string]any{
+							"provider": providerName,
+							"model":    modelName,
+						},
+						"next": map[string]any{
+							"provider": providerName,
+							"model":    modelName,
+						},
+					},
+					"sessionListMetadata": map[string]any{
+						"blank": isBlank,
+					},
+					"goal": goalProjection(rec),
+				}
+				addSubagentProjectionsLocked(rec, values)
 
 				// Register sub
 				ch := make(chan []byte, 100)
@@ -1711,27 +1778,7 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 						"hasMore": false,
 						"projections": map[string]any{
 							"asOfSeq": cursor,
-							"values": map[string]any{
-								"inbox": inbox,
-								"title": title,
-								"permissions": map[string]any{
-									"currentValue": "auto",
-								},
-								"modelSelection": map[string]any{
-									"lastUsed": map[string]any{
-										"provider": providerName,
-										"model":    modelName,
-									},
-									"next": map[string]any{
-										"provider": providerName,
-										"model":    modelName,
-									},
-								},
-								"sessionListMetadata": map[string]any{
-									"blank": isBlank,
-								},
-								"goal": goalProjection(rec),
-							},
+							"values":  values,
 						},
 					},
 				})

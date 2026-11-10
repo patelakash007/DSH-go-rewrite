@@ -27,7 +27,6 @@ func (s *Server) sessionProjection(rec *SessionRecord) map[string]any {
 	}
 	blank := len(rec.Events) == 0
 	inbox := inboxProjectionLocked(rec)
-	rec.mu.Unlock()
 	values := map[string]any{
 		"inbox":       inbox,
 		"title":       title,
@@ -40,6 +39,8 @@ func (s *Server) sessionProjection(rec *SessionRecord) map[string]any {
 		"goal":                goalProjection(rec),
 		"todos":               todoProjection(rec),
 	}
+	addSubagentProjectionsLocked(rec, values)
+	rec.mu.Unlock()
 	return map[string]any{"asOfSeq": int(rec.Log.LastSeq()), "values": values}
 }
 

@@ -106,6 +106,9 @@ const (
 	EventWorkspaceChange         EventType = "workspace/change"
 	EventUserQuestion            EventType = "user/question"
 	EventSandboxMode             EventType = "sandbox/mode"
+	EventSubagentCatalog         EventType = "subagent/catalog"
+	EventSubagentDescriptor      EventType = "subagent/descriptor"
+	EventSubagentModelPolicy     EventType = "subagent/model-selection-policy"
 )
 
 var AllEventTypes = []EventType{
@@ -123,6 +126,7 @@ var AllEventTypes = []EventType{
 	EventLLMRequest, EventLLMStream, EventLLMRetry, EventLLMError, EventLLMDone,
 	EventSurfaceReplace, EventAttachmentAdded, EventSessionProjectionUpdate, EventWorkspaceChange,
 	EventUserQuestion, EventSandboxMode,
+	EventSubagentCatalog, EventSubagentDescriptor, EventSubagentModelPolicy,
 }
 
 // ============================================================================
@@ -507,6 +511,37 @@ type EndSeedData struct {
 
 func (EndSeedData) EventType() EventType { return EventEndSeed }
 
+// SubagentCatalogEntry is one direct child row of a parent's subagent catalog.
+type SubagentCatalogEntry struct {
+	ID        string `json:"id"`
+	Mode      string `json:"mode"`
+	Label     string `json:"label,omitempty"`
+	CreatedAt int64  `json:"createdAt,omitempty"`
+}
+
+// SubagentCatalogData replaces the parent's direct-child catalog.
+type SubagentCatalogData struct {
+	Entries []SubagentCatalogEntry `json:"entries"`
+}
+
+func (SubagentCatalogData) EventType() EventType { return EventSubagentCatalog }
+
+// SubagentDescriptorData identifies a child session as a subagent.
+type SubagentDescriptorData struct {
+	Mode            string `json:"mode"`
+	Label           string `json:"label,omitempty"`
+	ParentSessionID string `json:"parentSessionId,omitempty"`
+}
+
+func (SubagentDescriptorData) EventType() EventType { return EventSubagentDescriptor }
+
+// SubagentModelPolicyData records the child's model-selection policy.
+type SubagentModelPolicyData struct {
+	Mode string `json:"mode"`
+}
+
+func (SubagentModelPolicyData) EventType() EventType { return EventSubagentModelPolicy }
+
 type PlanUpdateData struct {
 	Content string `json:"content,omitempty"`
 }
@@ -841,6 +876,12 @@ func newEventData(t EventType) (EventData, error) {
 		return UserQuestionData{}, nil
 	case EventSandboxMode:
 		return SandboxModeData{}, nil
+	case EventSubagentCatalog:
+		return SubagentCatalogData{}, nil
+	case EventSubagentDescriptor:
+		return SubagentDescriptorData{}, nil
+	case EventSubagentModelPolicy:
+		return SubagentModelPolicyData{}, nil
 	default:
 		return nil, fmt.Errorf("session: unknown event type %q", t)
 	}

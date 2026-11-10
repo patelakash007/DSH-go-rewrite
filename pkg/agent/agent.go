@@ -274,6 +274,25 @@ func (a *Agent) RunRequest(input, requestID string) error {
 	}
 }
 
+// RunRequestWait queues a turn and waits for that exact turn to finish. It is
+// used by synchronous callers such as the native subagent tool.
+func (a *Agent) RunRequestWait(ctx context.Context, input, requestID string) error {
+	a.ensureStarted()
+	req := &turnReq{kind: "run", input: input, requestID: requestID, done: make(chan error, 1)}
+	select {
+	case a.turnCh <- req:
+	default:
+		return ErrTurnQueueFull
+	}
+	select {
+	case err := <-req.done:
+		return err
+	case <-ctx.Done():
+		a.Cancel(CancelUser)
+		return ctx.Err()
+	}
+}
+
 func (a *Agent) Followup(input string) error {
 	return a.FollowupRequest(input, "")
 }

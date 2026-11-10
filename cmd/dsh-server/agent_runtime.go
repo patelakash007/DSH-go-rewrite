@@ -155,7 +155,7 @@ func (s *Server) ensureAgent(rec *SessionRecord) *agent.Agent {
 		Provider: provider, Model: rec.Model, DefaultTimeout: 15 * time.Minute,
 	})
 	definitions := rec.Tools.Tools()
-	definitions = append(definitions, nativeSkillTool(rec.Skills), s.scheduleCreateTool(rec.ID.Raw()))
+	definitions = append(definitions, nativeSkillTool(rec.Skills), s.scheduleCreateTool(rec.ID.Raw()), s.spawnSubagentTool(rec.ID.Raw()))
 	rec.Agent.SetTools(definitions...)
 	rec.Agent.SetToolProvider(func(name string) *tools.Tool {
 		switch name {
@@ -163,6 +163,8 @@ func (s *Server) ensureAgent(rec *SessionRecord) *agent.Agent {
 			return nativeSkillTool(rec.Skills)
 		case "schedule_create":
 			return s.scheduleCreateTool(rec.ID.Raw())
+		case "spawn_subagent":
+			return s.spawnSubagentTool(rec.ID.Raw())
 		default:
 			return rec.Tools.Lookup(name)
 		}
@@ -196,6 +198,32 @@ func (s *Server) onSessionEvent(rec *SessionRecord, event session.SessionEvent) 
 			rec.RunID = ""
 			shouldStartNext = true
 		}
+	case session.SubagentCatalogData:
+		rec.SubagentCatalog = append([]session.SubagentCatalogEntry(nil), data.Entries...)
+	case session.SubagentDescriptorData:
+		rec.Origin = "subagent"
+		rec.SubagentMode = data.Mode
+		rec.SubagentLabel = data.Label
+		if data.ParentSessionID != "" {
+			rec.ParentSessionID = data.ParentSessionID
+		}
+	case session.TurnStartData:
+		if rec.Origin == "subagent" {
+			rec.subagentActiveSince = event.Time
+			rec.subagentActiveUntil = event.Time
+			rec.subagentLastDone = nil
+		}
+	case session.TurnEndData:
+		if rec.Origin == "subagent" && !rec.subagentActiveSince.IsZero() {
+			rec.subagentSettledMs += event.Time.Sub(rec.subagentActiveSince).Milliseconds()
+			rec.subagentActiveSince = time.Time{}
+			rec.subagentActiveUntil = time.Time{}
+			completed := data.Reason == session.ReasonFinished
+			rec.subagentLastDone = &completed
+		}
+	}
+	if rec.Origin == "subagent" && !rec.subagentActiveSince.IsZero() {
+		rec.subagentActiveUntil = event.Time
 	}
 	frame := map[string]any{"type": "item", "value": map[string]any{"type": "event", "event": mapped}}
 	frameBytes, _ := json.Marshal(frame)

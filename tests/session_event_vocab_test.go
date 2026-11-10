@@ -71,6 +71,12 @@ func sampleDataFor(t session.EventType) session.EventData {
 		return session.TodoWriteData{Items: []string{"a", "b"}}
 	case session.EventEndSeed:
 		return session.EndSeedData{}
+	case session.EventSubagentCatalog:
+		return session.SubagentCatalogData{Entries: []session.SubagentCatalogEntry{{ID: "child", Mode: "one-shot", Label: "child", CreatedAt: 1}}}
+	case session.EventSubagentDescriptor:
+		return session.SubagentDescriptorData{Mode: "continuable", Label: "child", ParentSessionID: "parent"}
+	case session.EventSubagentModelPolicy:
+		return session.SubagentModelPolicyData{Mode: "continuable"}
 	case session.EventPlanUpdate:
 		return session.PlanUpdateData{Content: "plan"}
 	case session.EventRequestHeader:
