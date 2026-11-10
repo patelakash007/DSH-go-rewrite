@@ -1050,6 +1050,30 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 	case "schedule/catalog", "schedule/edit", "schedule/run", "schedule/history", "schedule/update", "schedule/delete":
 		return s.dispatchScheduleRPC(endpoint, args)
 
+	case "account/getState", "account/startSignIn", "account/cancelSignIn", "account/signOut", "account/getProfile", "account/getBalance", "account/hasRunningAccountTasks":
+		return s.dispatchAccountRPC(endpoint, args)
+
+	case "appAuth/list", "appAuth/begin", "appAuth/poll", "appAuth/answer", "appAuth/cancel", "appAuth/signOut":
+		return s.dispatchAppAuthRPC(endpoint, args)
+
+	case "dynamicCordisRunner/inventory":
+		return []any{}, nil
+
+	case "dynamicCordisRunner/stopFromPanel", "dynamicCordisRunner/undefineFromPanel":
+		return map[string]any{"ok": false, "reason": "missing"}, nil
+
+	case "pluginManager/registries":
+		return []any{}, nil
+
+	case "pluginManager/inspect":
+		return map[string]any{"found": false}, nil
+
+	case "pluginManager/setPluginEnabled", "pluginManager/setBundleEnabled", "pluginManager/removeBundle", "pluginManager/cancelInstall", "pluginManager/waitForInstall", "pluginManager/installBundle":
+		return map[string]any{
+			"ok": false, "code": "plugin-manager/unsupported",
+			"message": "Native plugin installation is not available yet; the standalone engine does not run Node packages.",
+		}, nil
+
 	case "session/search":
 		query, _ := args["query"].(string)
 		if query == "" {
@@ -1717,6 +1741,13 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 				}(streamId, ch)
+			} else if endpoint == "account/watch" {
+				removeSubscription(streamId)
+				watchCtx, cancel := context.WithCancel(r.Context())
+				watchCancellations[streamId] = cancel
+				go s.openAccountWatch(watchCtx, func(value map[string]any) error {
+					return safeWrite(map[string]any{"type": "item", "streamId": streamId, "value": value})
+				})
 			} else if endpoint == "job/list" {
 				removeSubscription(streamId)
 				args, _ := payload["args"].(map[string]any)

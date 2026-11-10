@@ -758,6 +758,49 @@ func (a *blockingAdapter) Chat(ctx context.Context, _ llm.ChatRequest, callback 
 	return llm.Usage{PromptTokens: 1, CompletionTokens: 1}, nil
 }
 
+func TestNativeAccountAndAppAuthStates(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	state, rpcErr := server.dispatchRPC(context.Background(), "account/getState", map[string]any{})
+	if rpcErr != nil || state.(map[string]any)["status"] != "signed-out" {
+		t.Fatalf("account state = %#v, %+v", state, rpcErr)
+	}
+	started, rpcErr := server.dispatchRPC(context.Background(), "account/startSignIn", map[string]any{})
+	if rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	attempt, _ := started.(map[string]any)["attempt"].(map[string]any)
+	if attempt["phase"] != "failed" || attempt["errorCode"] != "protocol" {
+		t.Fatalf("sign-in attempt = %#v", attempt)
+	}
+	if profile, rpcErr := server.dispatchRPC(context.Background(), "account/getProfile", map[string]any{}); rpcErr != nil || profile != nil {
+		t.Fatalf("account profile = %#v, %+v", profile, rpcErr)
+	}
+	if running, rpcErr := server.dispatchRPC(context.Background(), "account/hasRunningAccountTasks", map[string]any{}); rpcErr != nil || running != false {
+		t.Fatalf("account tasks = %#v, %+v", running, rpcErr)
+	}
+	subscriptions, rpcErr := server.dispatchRPC(context.Background(), "appAuth/list", map[string]any{})
+	if rpcErr != nil || len(subscriptions.(map[string]any)["providers"].([]map[string]any)) != 2 {
+		t.Fatalf("app auth list = %#v, %+v", subscriptions, rpcErr)
+	}
+	begin, rpcErr := server.dispatchRPC(context.Background(), "appAuth/begin", map[string]any{"provider": "anthropic"})
+	if rpcErr != nil || begin.(map[string]any)["attemptId"] == "" {
+		t.Fatalf("app auth begin = %#v, %+v", begin, rpcErr)
+	}
+	poll, rpcErr := server.dispatchRPC(context.Background(), "appAuth/poll", map[string]any{"attemptId": begin.(map[string]any)["attemptId"]})
+	if rpcErr != nil || poll.(map[string]any)["phase"] != "failed" {
+		t.Fatalf("app auth poll = %#v, %+v", poll, rpcErr)
+	}
+	inventory, rpcErr := server.dispatchRPC(context.Background(), "dynamicCordisRunner/inventory", map[string]any{})
+	if rpcErr != nil || len(inventory.([]any)) != 0 {
+		t.Fatalf("cordis inventory = %#v, %+v", inventory, rpcErr)
+	}
+	install, rpcErr := server.dispatchRPC(context.Background(), "pluginManager/installBundle", map[string]any{})
+	if rpcErr != nil || install.(map[string]any)["code"] != "plugin-manager/unsupported" {
+		t.Fatalf("plugin install = %#v, %+v", install, rpcErr)
+	}
+}
+
 func TestNativeCustomProviderRoutingAndDiscovery(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
