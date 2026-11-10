@@ -110,9 +110,10 @@ type Server struct {
 	controlMu   sync.Mutex
 	controlSubs map[string]chan map[string]any
 
-	settings *nativeSettings
-	feedback *feedbackStore
-	jobs     *jobManager
+	settings  *nativeSettings
+	feedback  *feedbackStore
+	jobs      *jobManager
+	schedules *scheduleStore
 }
 
 func newServer(port int, homeDir string) (*Server, error) {
@@ -206,6 +207,12 @@ func newServerWithWorkspace(port int, homeDir, workspaceDir string) (*Server, er
 	}
 	s.feedback = feedback
 	s.jobs = newJobManager()
+	schedules, err := newScheduleStore(filepath.Join(homeDir, "schedules.json"))
+	if err != nil {
+		_ = dbStore.Close()
+		return nil, fmt.Errorf("load native schedules: %w", err)
+	}
+	s.schedules = schedules
 	defaultPermission, _ := settings.getString("native-engine", "defaultPermission")
 
 	// Restore known sessions from SQLite
@@ -1024,6 +1031,9 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 
 	case "job/kill":
 		return s.dispatchJobRPC(endpoint, args)
+
+	case "schedule/catalog", "schedule/edit", "schedule/run", "schedule/history", "schedule/update", "schedule/delete":
+		return s.dispatchScheduleRPC(endpoint, args)
 
 	case "session/search":
 		query, _ := args["query"].(string)
@@ -1955,6 +1965,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to initialize server: %v", err)
 	}
+	server.startScheduleLoop()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", server.handleRoot)

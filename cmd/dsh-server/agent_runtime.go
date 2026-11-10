@@ -146,13 +146,17 @@ func (s *Server) ensureAgent(rec *SessionRecord) *agent.Agent {
 		Provider: "deepseek", Model: rec.Model, DefaultTimeout: 15 * time.Minute,
 	})
 	definitions := rec.Tools.Tools()
-	definitions = append(definitions, nativeSkillTool(rec.Skills))
+	definitions = append(definitions, nativeSkillTool(rec.Skills), s.scheduleCreateTool(rec.ID.Raw()))
 	rec.Agent.SetTools(definitions...)
 	rec.Agent.SetToolProvider(func(name string) *tools.Tool {
-		if name == "load_skill" {
+		switch name {
+		case "load_skill":
 			return nativeSkillTool(rec.Skills)
+		case "schedule_create":
+			return s.scheduleCreateTool(rec.ID.Raw())
+		default:
+			return rec.Tools.Lookup(name)
 		}
-		return rec.Tools.Lookup(name)
 	})
 	return rec.Agent
 }

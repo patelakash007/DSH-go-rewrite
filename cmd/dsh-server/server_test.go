@@ -732,6 +732,84 @@ func TestNativeSettingsAndCommandCatalogue(t *testing.T) {
 	}
 }
 
+func TestNativeSchedulesLifecycle(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	rec := server.getOrCreateSession("schedule-session", "")
+	created, err := server.createScheduleFromTool(rec.ID.Raw(), map[string]any{
+		"title": "Native reminder", "prompt": "Remember the native engine",
+		"every_seconds": 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskID := created.(map[string]any)["id"].(string)
+	catalog, rpcErr := server.dispatchRPC(context.Background(), "schedule/catalog", map[string]any{})
+	if rpcErr != nil || len(catalog.([]*scheduleTask)) != 1 {
+		t.Fatalf("schedule catalog = %#v, %+v", catalog, rpcErr)
+	}
+	task := catalog.([]*scheduleTask)[0]
+	if task.Title != "Native reminder" || task.Kind != "every" || task.Status != "active" {
+		t.Fatalf("schedule task = %#v", task)
+	}
+	edited, rpcErr := server.dispatchRPC(context.Background(), "schedule/edit", map[string]any{
+		"request": map[string]any{
+			"id": taskID, "action": "update", "expectedUpdatedAt": task.UpdatedAt,
+			"patch": map[string]any{"title": "Renamed reminder"},
+		},
+	})
+	if rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	editedTask := edited.(scheduleTask)
+	if editedTask.Title != "Renamed reminder" {
+		t.Fatalf("edited schedule = %#v", editedTask)
+	}
+	if _, rpcErr := server.dispatchRPC(context.Background(), "schedule/run", map[string]any{
+		"request": map[string]any{"id": taskID},
+	}); rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	history, rpcErr := server.dispatchRPC(context.Background(), "schedule/history", map[string]any{
+		"request": map[string]any{"id": taskID, "limit": 10},
+	})
+	if rpcErr != nil || len(history.(map[string]any)["records"].([]scheduleDelivery)) != 1 {
+		t.Fatalf("schedule history = %#v, %+v", history, rpcErr)
+	}
+	if _, rpcErr := server.dispatchRPC(context.Background(), "schedule/delete", map[string]any{
+		"request": map[string]any{"id": taskID},
+	}); rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	catalog, _ = server.dispatchRPC(context.Background(), "schedule/catalog", map[string]any{})
+	if len(catalog.([]*scheduleTask)) != 0 {
+		t.Fatalf("schedule catalog after delete = %#v", catalog)
+	}
+	if _, err := os.Stat(server.schedules.path); err != nil {
+		t.Fatalf("schedule store not persisted: %v", err)
+	}
+}
+
+func TestNativeScheduleTimingRules(t *testing.T) {
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	location := time.UTC
+	next, err := nextDaily(now, "13:30:00", location)
+	if err != nil || !next.Equal(time.Date(2026, 11, 10, 13, 30, 0, 0, time.UTC)) {
+		t.Fatalf("next daily = %v, %v", next, err)
+	}
+	next, err = nextWeekly(now, "09:00:00", []int{2}, location)
+	if err != nil || next.Weekday() != time.Tuesday || !next.After(now) {
+		t.Fatalf("next weekly = %v, %v", next, err)
+	}
+	next, err = nextCron(now, "*/15 * * * *", location)
+	if err != nil || next.Minute()%15 != 0 || !next.After(now) {
+		t.Fatalf("next cron = %v, %v", next, err)
+	}
+	if _, err := nextCron(now, "not a cron", location); err == nil {
+		t.Fatal("invalid cron accepted")
+	}
+}
+
 func TestNativeBackgroundJobs(t *testing.T) {
 	server, _, cleanup := setupTestServer(t)
 	defer cleanup()
