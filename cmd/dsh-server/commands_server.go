@@ -10,6 +10,8 @@ import (
 	"github.com/JopenChen/dsh-go/pkg/uuid"
 )
 
+const goalCommandUsage = "Usage: /goal [<objective>|clear|edit <objective>|pause|resume]"
+
 func nativeCommandCatalog() []map[string]any {
 	return []map[string]any{
 		{"name": "compact", "description": "Compact the conversation into a summary", "definitionId": "@deepseek-ai/dsh-command-compact"},
@@ -65,7 +67,7 @@ func (s *Server) executeNativeCommand(ctx context.Context, rec *SessionRecord, l
 		}
 		_, _ = rec.Log.Append(session.PlanModeData{Mode: mode})
 		if mode == "on" {
-			return success("Plan mode on.")
+			return success("Plan mode on. Use /plan off to leave.")
 		}
 		return success("Plan mode off.")
 	case "/goal":
@@ -73,6 +75,18 @@ func (s *Server) executeNativeCommand(ctx context.Context, rec *SessionRecord, l
 	default:
 		return nil, &RPCError{Code: "commands/not-found", Message: "native engine does not implement this command"}
 	}
+}
+
+func goalCommandSummary(title string, view map[string]any) string {
+	phase, _ := view["phase"].(string)
+	objective, _ := view["objective"].(string)
+	maxRounds := numberArg(view, "maxGoalRounds", 0)
+	rounds := numberArg(view, "roundsStarted", 0)
+	activation, _ := view["activation"].(string)
+	return fmt.Sprintf(
+		"%s\nStatus: %s\nObjective: %s\nRounds: %d/%d\nActivation: %s\n\nCommands: /goal edit <objective>, /goal pause, /goal resume, /goal clear",
+		title, phase, objective, rounds, maxRounds, activation,
+	)
 }
 
 func (s *Server) executeGoalCommand(rec *SessionRecord, args []string) (any, *RPCError) {
@@ -85,16 +99,28 @@ func (s *Server) executeGoalCommand(rec *SessionRecord, args []string) (any, *RP
 	current, present := goal.FromLog(rec.Log)
 	if len(args) == 0 {
 		if !present {
-			return success("No goal is currently set. Usage: /goal <objective> | edit <objective> | pause | resume | clear")
+			return success("No goal is currently set.\n" + goalCommandUsage)
 		}
-		return success(fmt.Sprintf("Goal (%s): %s\n\nCommands: /goal edit <objective>, /goal pause, /goal resume, /goal clear", current.Phase, current.Description))
+		return success(goalCommandSummary("Goal", s.goalView(rec.ID.Raw(), current)))
 	}
 	action := args[0]
 	ref := map[string]any{"id": current.ID, "revision": current.Revision}
+	runGoal := func(endpoint string, request map[string]any) (map[string]any, *RPCError) {
+		payload := map[string]any{"agentId": rec.ID.Raw(), "ref": ref}
+		if request != nil {
+			payload["request"] = request
+		}
+		value, rpcErr := s.dispatchGoalRPC(endpoint, payload)
+		if rpcErr != nil {
+			return nil, rpcErr
+		}
+		view, _ := value.(map[string]any)
+		return view, nil
+	}
 	switch action {
 	case "clear":
 		if !present {
-			return success("No goal is currently set.")
+			return success("No goal to clear.")
 		}
 		if _, rpcErr := s.dispatchGoalRPC("goals/clear", map[string]any{
 			"agentId": rec.ID.Raw(), "ref": ref,
@@ -104,60 +130,58 @@ func (s *Server) executeGoalCommand(rec *SessionRecord, args []string) (any, *RP
 		return success("Goal cleared.")
 	case "pause":
 		if !present {
-			return success("No goal is currently set; /goal pause requires one.")
+			return success("No goal is currently set; /goal pause requires one. " + goalCommandUsage)
 		}
-		if _, rpcErr := s.dispatchGoalRPC("goals/pause", map[string]any{
-			"agentId": rec.ID.Raw(), "ref": ref,
-		}); rpcErr != nil {
+		view, rpcErr := runGoal("goals/pause", nil)
+		if rpcErr != nil {
 			return nil, rpcErr
 		}
-		return success("Goal paused.")
+		return success(goalCommandSummary("Goal paused", view))
 	case "resume":
 		if !present {
-			return success("No goal is currently set; /goal resume requires one.")
+			return success("No goal is currently set; /goal resume requires one. " + goalCommandUsage)
 		}
-		if _, rpcErr := s.dispatchGoalRPC("goals/resume", map[string]any{
-			"agentId": rec.ID.Raw(), "ref": ref,
-		}); rpcErr != nil {
+		view, rpcErr := runGoal("goals/resume", nil)
+		if rpcErr != nil {
 			return nil, rpcErr
 		}
-		return success("Goal resumed.")
+		return success(goalCommandSummary("Goal resumed", view))
 	case "complete":
 		if !present {
-			return success("No goal is currently set; /goal complete requires one.")
+			return success("No goal is currently set; /goal complete requires one. " + goalCommandUsage)
 		}
-		if _, rpcErr := s.dispatchGoalRPC("goals/complete", map[string]any{
-			"agentId": rec.ID.Raw(), "ref": ref,
-		}); rpcErr != nil {
+		view, rpcErr := runGoal("goals/complete", nil)
+		if rpcErr != nil {
 			return nil, rpcErr
 		}
-		return success("Goal completed.")
+		return success(goalCommandSummary("Goal", view))
 	case "edit":
 		if !present {
-			return success("No goal is currently set; /goal edit requires one.")
+			return success("No goal is currently set; /goal edit requires one. " + goalCommandUsage)
 		}
 		objective := strings.TrimSpace(strings.Join(args[1:], " "))
 		if objective == "" {
-			return success("Usage: /goal edit <objective>")
+			return success("Goal editing requires a replacement objective.\n" + goalCommandUsage)
 		}
-		if _, rpcErr := s.dispatchGoalRPC("goals/edit", map[string]any{
-			"agentId": rec.ID.Raw(), "ref": ref,
-			"request": map[string]any{"objective": objective},
-		}); rpcErr != nil {
+		view, rpcErr := runGoal("goals/edit", map[string]any{"objective": objective})
+		if rpcErr != nil {
 			return nil, rpcErr
 		}
-		return success("Goal updated.")
+		return success(goalCommandSummary("Goal updated", view))
 	default:
 		objective := strings.TrimSpace(strings.Join(args, " "))
 		if objective == "" {
-			return success("Usage: /goal <objective>")
+			return success("No goal is currently set.\n" + goalCommandUsage)
 		}
-		if _, rpcErr := s.dispatchGoalRPC("goals/create", map[string]any{
+		value, rpcErr := s.dispatchGoalRPC("goals/create", map[string]any{
 			"agentId": rec.ID.Raw(),
 			"request": map[string]any{"objective": objective},
-		}); rpcErr != nil {
+		})
+		if rpcErr != nil {
 			return nil, rpcErr
 		}
-		return success("Goal created: " + objective)
+		_ = value
+		created, _ := goal.FromLog(rec.Log)
+		return success(goalCommandSummary("Goal created", s.goalView(rec.ID.Raw(), created)))
 	}
 }
