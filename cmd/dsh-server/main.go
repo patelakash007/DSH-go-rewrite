@@ -140,6 +140,7 @@ type Server struct {
 	feedback  *feedbackStore
 	jobs      *jobManager
 	schedules *scheduleStore
+	account   *accountState
 }
 
 func newServer(port int, homeDir string) (*Server, error) {
@@ -217,6 +218,7 @@ func newServerWithWorkspace(port int, homeDir, workspaceDir string) (*Server, er
 		closedTerminalIDs:  make(map[string]bool),
 		goalActivation:     make(map[string]bool),
 		controlSubs:        make(map[string]chan map[string]any),
+		account:            newAccountState(),
 	}
 	if err := s.loadWorkspaceState(); err != nil {
 		_ = dbStore.Close()
@@ -2120,6 +2122,7 @@ func main() {
 	mux.HandleFunc("/api/file", server.handleFile)
 	mux.HandleFunc("/api/session/uploadFileBinary", server.handleUploadBinary)
 	mux.HandleFunc("/api/session.export", server.handleSessionExport)
+	mux.HandleFunc("/oauth/callback", server.handleOAuthCallback)
 	mux.HandleFunc("/api/", server.handleRPC)
 	mux.HandleFunc("/dsh-go/v1/info", server.handleBuildInfo)
 	mux.HandleFunc("/dsh-go/v1/sessions/deletion", server.handleSessionDeletionCapability)

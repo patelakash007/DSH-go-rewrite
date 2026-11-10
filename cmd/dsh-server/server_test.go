@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,6 +54,7 @@ func setupTestServer(t *testing.T) (*Server, *httptest.Server, func()) {
 	mux.HandleFunc("/api/file", server.handleFile)
 	mux.HandleFunc("/api/session/uploadFileBinary", server.handleUploadBinary)
 	mux.HandleFunc("/api/session.export", server.handleSessionExport)
+	mux.HandleFunc("/oauth/callback", server.handleOAuthCallback)
 	mux.HandleFunc("/api/", server.handleRPC)
 	mux.HandleFunc("/dsh-go/v1/info", server.handleBuildInfo)
 	mux.HandleFunc("/dsh-go/v1/sessions/deletion", server.handleSessionDeletionCapability)
@@ -1128,13 +1130,8 @@ func TestNativeAccountAndAppAuthStates(t *testing.T) {
 	if rpcErr != nil || state.(map[string]any)["status"] != "signed-out" {
 		t.Fatalf("account state = %#v, %+v", state, rpcErr)
 	}
-	started, rpcErr := server.dispatchRPC(context.Background(), "account/startSignIn", map[string]any{})
-	if rpcErr != nil {
-		t.Fatal(rpcErr.Message)
-	}
-	attempt, _ := started.(map[string]any)["attempt"].(map[string]any)
-	if attempt["phase"] != "failed" || attempt["errorCode"] != "protocol" {
-		t.Fatalf("sign-in attempt = %#v", attempt)
+	if _, rpcErr := server.dispatchRPC(context.Background(), "account/startSignIn", map[string]any{}); rpcErr == nil || rpcErr.Code != "gateway/arguments-invalid" {
+		t.Fatalf("sign-in without callback origin = %+v", rpcErr)
 	}
 	if profile, rpcErr := server.dispatchRPC(context.Background(), "account/getProfile", map[string]any{}); rpcErr != nil || profile != nil {
 		t.Fatalf("account profile = %#v, %+v", profile, rpcErr)
@@ -1165,6 +1162,99 @@ func TestNativeAccountAndAppAuthStates(t *testing.T) {
 	inspect, rpcErr := server.dispatchRPC(context.Background(), "pluginManager/inspect", map[string]any{"spec": "missing"})
 	if rpcErr != nil || inspect.(map[string]any)["status"] != "refused" {
 		t.Fatalf("plugin inspect = %#v, %+v", inspect, rpcErr)
+	}
+}
+
+func TestNativeDeepSeekAccountSignIn(t *testing.T) {
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/auth-api/v0/dsh/auth_init":
+			_, _ = w.Write([]byte(`{"code":0,"data":{"biz_code":0,"biz_data":{"authorize_url":"https://platform.deepseek.com/dsh/authorize?authorize_id=a-1","authorize_id":"a-1","expires_in":600}}}`))
+		case "/auth-api/v0/dsh/auth_exchange":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["code"] != "native-code" || body["code_verifier"] == "" {
+				http.Error(w, "bad exchange", http.StatusBadRequest)
+				return
+			}
+			_, _ = w.Write([]byte(`{"code":0,"data":{"biz_code":0,"biz_data":{"token":"native-token","authorized_url":"https://platform.deepseek.com/dsh/authorized","user":{"id":"u1","email":"native@example.com","id_profile":{"name":"Native User","picture":null}}}}}`))
+		case "/auth-api/v0/dsh/auth_cancel":
+			_, _ = w.Write([]byte(`{"code":0,"data":{"biz_code":0,"biz_data":{}}}`))
+		case "/auth-api/v0/users/current":
+			if r.Header.Get("x-dsh-auth-token") != "native-token" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			_, _ = w.Write([]byte(`{"code":0,"data":{"biz_code":0,"biz_data":{"id":"u1","email":"native@example.com","id_profile":{"name":"Native User","picture":null}}}}`))
+		case "/api/v0/users/get_user_summary":
+			if r.Header.Get("x-dsh-auth-token") != "native-token" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			_, _ = w.Write([]byte(`{"code":0,"data":{"biz_code":0,"biz_data":{"normal_wallets":[{"currency":"USD","balance":"1.50"}],"bonus_wallets":[]}}}`))
+		case "/auth-api/v0/users/logout":
+			_, _ = w.Write([]byte(`{"code":0,"data":{"biz_code":0,"biz_data":{}}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer platform.Close()
+	t.Setenv("DSH_DEEPSEEK_PLATFORM_ORIGIN", platform.URL)
+
+	server, ts, cleanup := setupTestServer(t)
+	defer cleanup()
+	started, rpcErr := server.dispatchRPC(context.Background(), "account/startSignIn", map[string]any{
+		"callbackOrigin": "http://127.0.0.1:39080", "loginSource": "web",
+	})
+	if rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	attempt, _ := started.(map[string]any)["attempt"].(map[string]any)
+	if attempt["phase"] != "waiting-browser" || !strings.Contains(attempt["authorizeUrl"].(string), "/dsh/authorize") {
+		t.Fatalf("sign-in attempt = %#v", attempt)
+	}
+	server.account.mu.Lock()
+	state := server.account.attempt.State
+	server.account.mu.Unlock()
+	response, err := ts.Client().Get(ts.URL + "/oauth/callback?code=native-code&state=" + url.QueryEscape(state))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("callback status = %d", response.StatusCode)
+	}
+	view, rpcErr := server.dispatchRPC(context.Background(), "account/getState", map[string]any{})
+	if rpcErr != nil || view.(map[string]any)["status"] != "credential-stored" {
+		t.Fatalf("signed-in account state = %#v, %+v", view, rpcErr)
+	}
+	attempt, _ = view.(map[string]any)["attempt"].(map[string]any)
+	if attempt["phase"] != "succeeded" {
+		t.Fatalf("succeeded attempt = %#v", attempt)
+	}
+	profile, rpcErr := server.dispatchRPC(context.Background(), "account/getProfile", map[string]any{})
+	if rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	profileValue, _ := profile.(map[string]any)["value"].(map[string]any)
+	if profileValue["name"] != "Native User" || profileValue["contact"] != "native@example.com" {
+		t.Fatalf("account profile = %#v", profile)
+	}
+	balance, rpcErr := server.dispatchRPC(context.Background(), "account/getBalance", map[string]any{})
+	if rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	wallets, _ := balance.(map[string]any)["value"].([]any)
+	if len(wallets) != 1 || wallets[0].(map[string]any)["balance"] != "1.50" {
+		t.Fatalf("account balance = %#v", balance)
+	}
+	signedOut, rpcErr := server.dispatchRPC(context.Background(), "account/signOut", map[string]any{})
+	if rpcErr != nil || signedOut.(map[string]any)["status"] != "signed-out" {
+		t.Fatalf("signed-out account state = %#v, %+v", signedOut, rpcErr)
+	}
+	if profile, rpcErr := server.dispatchRPC(context.Background(), "account/getProfile", map[string]any{}); rpcErr != nil || profile != nil {
+		t.Fatalf("profile after sign-out = %#v, %+v", profile, rpcErr)
 	}
 }
 
