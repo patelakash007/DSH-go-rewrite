@@ -1170,6 +1170,9 @@ func TestNativeCompactCommand(t *testing.T) {
 	server, _, cleanup := setupTestServer(t)
 	defer cleanup()
 	server.adapter = &recordingAdapter{requests: make(chan llm.ChatRequest, 4)}
+	if err := server.credStore.Set(context.Background(), brand.NewCredentialRef("DEEPSEEK_API_KEY"), "test-key"); err != nil {
+		t.Fatal(err)
+	}
 	rec := server.getOrCreateSession("compact-session", "")
 	for index := 0; index < 3; index++ {
 		_, _ = rec.Log.Append(session.UserMessageData{Content: fmt.Sprintf("question %d", index)})

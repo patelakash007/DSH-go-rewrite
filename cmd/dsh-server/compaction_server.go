@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/JopenChen/dsh-go/pkg/brand"
 	"github.com/JopenChen/dsh-go/pkg/compaction"
 	"github.com/JopenChen/dsh-go/pkg/llm"
 	"github.com/JopenChen/dsh-go/pkg/session"
@@ -75,6 +76,12 @@ func (s *Server) compactSession(ctx context.Context, rec *SessionRecord) (string
 	}
 	if model == "" {
 		model = "deepseek-chat"
+	}
+	if provider == "deepseek" {
+		key, configured := s.credStore.Resolve(ctx, brand.NewCredentialRef("DEEPSEEK_API_KEY"))
+		if !configured || strings.TrimSpace(key) == "" {
+			return "", fmt.Errorf("configure DEEPSEEK_API_KEY before compacting")
+		}
 	}
 	compactor := compaction.New(compaction.Config{
 		MaxTokens: 1, KeepTail: 4, SummaryMaxRunes: 1600,
