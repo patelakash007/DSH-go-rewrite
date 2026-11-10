@@ -90,7 +90,7 @@ func (s *Server) startNextQueued(rec *SessionRecord) {
 	rec.mu.Lock()
 	rec.Cancel = func() { runtimeAgent.Cancel(agent.CancelUser) }
 	rec.mu.Unlock()
-	if err := runtimeAgent.RunRequest(item.Text, item.RequestID); err != nil {
+	if err := runtimeAgent.RunRequestWithContext(item.Text, item.RequestID, item.Context); err != nil {
 		rec.mu.Lock()
 		rec.Cancel = nil
 		rec.RunID = ""

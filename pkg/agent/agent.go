@@ -84,6 +84,7 @@ type turnReq struct {
 
 	input     string
 	requestID string
+	context   string
 
 	done chan error
 }
@@ -264,8 +265,14 @@ func (a *Agent) Run(input string) error {
 }
 
 func (a *Agent) RunRequest(input, requestID string) error {
+	return a.RunRequestWithContext(input, requestID, "")
+}
+
+// RunRequestWithContext queues a turn with one-turn system context (for
+// example a referenced-conversation snapshot).
+func (a *Agent) RunRequestWithContext(input, requestID, context string) error {
 	a.ensureStarted()
-	req := &turnReq{kind: "run", input: input, requestID: requestID, done: make(chan error, 1)}
+	req := &turnReq{kind: "run", input: input, requestID: requestID, context: context, done: make(chan error, 1)}
 	select {
 	case a.turnCh <- req:
 		return nil
@@ -298,8 +305,14 @@ func (a *Agent) Followup(input string) error {
 }
 
 func (a *Agent) FollowupRequest(input, requestID string) error {
+	return a.FollowupRequestWithContext(input, requestID, "")
+}
+
+// FollowupRequestWithContext queues a follow-up turn with one-turn system
+// context.
+func (a *Agent) FollowupRequestWithContext(input, requestID, context string) error {
 	a.ensureStarted()
-	req := &turnReq{kind: "followup", input: input, requestID: requestID, done: make(chan error, 1)}
+	req := &turnReq{kind: "followup", input: input, requestID: requestID, context: context, done: make(chan error, 1)}
 	select {
 	case a.turnCh <- req:
 		return nil
@@ -420,6 +433,9 @@ func (a *Agent) runStep(ctx context.Context, req *turnReq, turnIdx, stepSeq uint
 	system := ""
 	if a.sys != nil {
 		system = a.sys.Assemble()
+	}
+	if req.context != "" {
+		system += "\n\n" + req.context
 	}
 	messages := deriveLLMMessages(a.log.Events())
 

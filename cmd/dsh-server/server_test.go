@@ -762,6 +762,49 @@ func (a *blockingAdapter) Chat(ctx context.Context, _ llm.ChatRequest, callback 
 	return llm.Usage{PromptTokens: 1, CompletionTokens: 1}, nil
 }
 
+func TestNativeSessionReferenceExpansion(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	source := server.getOrCreateSession("reference-source", "")
+	target := server.getOrCreateSession("reference-target", "")
+	_, _ = target.Log.Append(session.SessionTitleData{Title: "Target conversation", Source: "user"})
+	_, _ = target.Log.Append(session.UserMessageData{Content: "target question"})
+	_, _ = target.Log.Append(session.AssistantMessageData{Content: "target answer"})
+
+	mention := sessionMention("reference-target", "Target conversation")
+	rewritten, referenceContext := server.expandSessionReferences(source, "compare "+mention)
+	if rewritten != "compare @Target conversation" {
+		t.Fatalf("rewritten prompt = %q", rewritten)
+	}
+	if !strings.Contains(referenceContext, "target question") || !strings.Contains(referenceContext, "target answer") {
+		t.Fatalf("reference context = %q", referenceContext)
+	}
+	unknown := sessionMention("missing-session", "Missing")
+	rewritten, referenceContext = server.expandSessionReferences(source, unknown)
+	if rewritten != unknown || referenceContext != "" {
+		t.Fatalf("unknown reference = %q, %q", rewritten, referenceContext)
+	}
+
+	adapter := &recordingAdapter{requests: make(chan llm.ChatRequest, 4)}
+	server.adapter = adapter
+	if _, rpcErr := server.dispatchRPC(context.Background(), "session/prompt", map[string]any{
+		"request": map[string]any{
+			"sessionId": source.ID.Raw(), "requestId": "reference-request",
+			"content": []any{map[string]any{"type": "text", "text": "compare " + mention}},
+		},
+	}); rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	select {
+	case request := <-adapter.requests:
+		if !strings.Contains(request.System, "target question") || !strings.Contains(request.System, "target answer") {
+			t.Fatalf("model system context = %q", request.System)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("model request was not made")
+	}
+}
+
 func TestNativeCotTranslation(t *testing.T) {
 	server, _, cleanup := setupTestServer(t)
 	defer cleanup()

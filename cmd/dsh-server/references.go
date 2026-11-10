@@ -5,9 +5,97 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
+
+var sessionMentionPattern = regexp.MustCompile(`@\[([^\]]*)\]\(dsh-session:([A-Za-z0-9_-]+)\)`)
+
+const maxReferenceSnapshotChars = 12000
+
+// expandSessionReferences rewrites canonical `@[label](dsh-session:…)` mentions
+// to `@label` and builds a read-only snapshot of each referenced conversation
+// for the turn's system context.
+func (s *Server) expandSessionReferences(source *SessionRecord, text string) (string, string) {
+	if source == nil || !strings.Contains(text, "dsh-session:") {
+		return text, ""
+	}
+	var context strings.Builder
+	rewritten := sessionMentionPattern.ReplaceAllStringFunc(text, func(match string) string {
+		parts := sessionMentionPattern.FindStringSubmatch(match)
+		if len(parts) != 3 {
+			return match
+		}
+		label := parts[1]
+		raw, err := base64.RawURLEncoding.DecodeString(parts[2])
+		if err != nil {
+			return match
+		}
+		var sessionID string
+		if json.Unmarshal(raw, &sessionID) != nil || sessionID == "" {
+			return match
+		}
+		if sessionID == source.ID.Raw() {
+			return "@" + label
+		}
+		rec := s.sessionByID(sessionID)
+		if rec == nil {
+			return match
+		}
+		if snapshot := sessionSnapshotText(rec); snapshot != "" {
+			context.WriteString("\n[Referenced conversation: ")
+			context.WriteString(label)
+			context.WriteString("]\n")
+			context.WriteString(snapshot)
+			context.WriteString("\n[/Referenced conversation]\n")
+		}
+		return "@" + label
+	})
+	return rewritten, context.String()
+}
+
+func sessionSnapshotText(rec *SessionRecord) string {
+	rec.mu.Lock()
+	events := make([]map[string]any, len(rec.Events))
+	copy(events, rec.Events)
+	rec.mu.Unlock()
+	var builder strings.Builder
+	for _, event := range events {
+		if builder.Len() >= maxReferenceSnapshotChars {
+			builder.WriteString("\n[snapshot truncated]\n")
+			break
+		}
+		eventType, _ := event["type"].(string)
+		data, _ := event["data"].(map[string]any)
+		message, _ := data["message"].(map[string]any)
+		if message == nil {
+			message = data
+		}
+		content, _ := message["content"].([]map[string]any)
+		var text strings.Builder
+		for _, block := range content {
+			if block["type"] == "text" {
+				value, _ := block["text"].(string)
+				text.WriteString(value)
+			}
+		}
+		if text.Len() == 0 {
+			continue
+		}
+		switch eventType {
+		case "user/message":
+			builder.WriteString("User: ")
+		case "assistant/message":
+			builder.WriteString("Assistant: ")
+		default:
+			continue
+		}
+		builder.WriteString(text.String())
+		builder.WriteString("\n\n")
+	}
+	return strings.TrimSpace(builder.String())
+}
 
 func (s *Server) dispatchReferences(endpoint string, args map[string]any) (any, *RPCError) {
 	sessionID, _ := args["agentId"].(string)

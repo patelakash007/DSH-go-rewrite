@@ -91,6 +91,7 @@ type queuedPrompt struct {
 	ID        string
 	RequestID string
 	Text      string
+	Context   string
 	CreatedAt time.Time
 }
 
@@ -720,6 +721,7 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		if strings.TrimSpace(promptText) == "" {
 			return nil, &RPCError{Code: "gateway/bad-request", Message: "prompt content is empty"}
 		}
+		promptText, referenceContext := s.expandSessionReferences(rec, promptText)
 
 		mode, _ := reqMap["mode"].(string)
 		rec.mu.Lock()
@@ -730,7 +732,7 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		wasRunning := rec.Cancel != nil
 		rec.Requests[reqId] = struct{}{}
 		if wasRunning {
-			item := queuedPrompt{ID: uuid.MustV4(), RequestID: reqId, Text: promptText, CreatedAt: time.Now()}
+			item := queuedPrompt{ID: uuid.MustV4(), RequestID: reqId, Text: promptText, Context: referenceContext, CreatedAt: time.Now()}
 			if mode == "steer" {
 				rec.Queue = append([]queuedPrompt{item}, rec.Queue...)
 			} else {
@@ -759,9 +761,9 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		rec.mu.Unlock()
 		var enqueueErr error
 		if runtimeAgent.Status() == agent.StatusRunning {
-			enqueueErr = runtimeAgent.FollowupRequest(promptText, reqId)
+			enqueueErr = runtimeAgent.FollowupRequestWithContext(promptText, reqId, referenceContext)
 		} else {
-			enqueueErr = runtimeAgent.RunRequest(promptText, reqId)
+			enqueueErr = runtimeAgent.RunRequestWithContext(promptText, reqId, referenceContext)
 		}
 		if enqueueErr != nil {
 			rec.mu.Lock()
