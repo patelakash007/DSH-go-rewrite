@@ -37,6 +37,8 @@ type terminalRecord struct {
 
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
+	master *os.File
+	pty    bool
 	cancel context.CancelFunc
 	done   chan struct{}
 
@@ -171,29 +173,64 @@ func (s *Server) createTerminal(_ context.Context, sessionID, id, shellPath, cwd
 	command := exec.CommandContext(runCtx, shellPath)
 	command.Dir = cwd
 	command.Env = nativeTerminalEnvironment(cwd)
-	if runtime.GOOS != "windows" {
-		command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	}
-	stdin, err := command.StdinPipe()
-	if err != nil {
-		cancel()
-		s.terminalMu.Unlock()
-		return nil, &RPCError{Code: "terminal/unavailable", Message: err.Error()}
-	}
-	reader, writer := io.Pipe()
-	command.Stdout = writer
-	command.Stderr = writer
 	terminal := &terminalRecord{
 		id: id, sessionID: sessionID, title: "sh", shellPath: shellPath, cwd: cwd,
-		cols: cols, rows: rows, cmd: command, stdin: stdin, cancel: cancel,
+		cols: cols, rows: rows, cmd: command, cancel: cancel,
 		done: make(chan struct{}), state: "running", subs: map[string]chan map[string]any{},
+	}
+	var (
+		reader io.Reader
+		writer *io.PipeWriter
+		slave  *os.File
+	)
+	master, slaveFile, ptyErr := openPTY()
+	if ptyErr == nil {
+		_ = setPTYSize(master, cols, rows)
+		command.Stdin = slaveFile
+		command.Stdout = slaveFile
+		command.Stderr = slaveFile
+		command.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+		terminal.master = master
+		terminal.pty = true
+		terminal.stdin = master
+		reader = master
+		slave = slaveFile
+	} else {
+		if runtime.GOOS != "windows" {
+			command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		}
+		stdin, err := command.StdinPipe()
+		if err != nil {
+			cancel()
+			s.terminalMu.Unlock()
+			return nil, &RPCError{Code: "terminal/unavailable", Message: err.Error()}
+		}
+		pipeReader, pipeWriter := io.Pipe()
+		command.Stdout = pipeWriter
+		command.Stderr = pipeWriter
+		terminal.stdin = stdin
+		reader = pipeReader
+		writer = pipeWriter
 	}
 	if err := command.Start(); err != nil {
 		cancel()
-		_ = reader.Close()
-		_ = writer.Close()
+		if slave != nil {
+			_ = slave.Close()
+		}
+		if master != nil {
+			_ = master.Close()
+		}
+		if closer, ok := reader.(io.Closer); ok && reader != master {
+			_ = closer.Close()
+		}
+		if writer != nil {
+			_ = writer.Close()
+		}
 		s.terminalMu.Unlock()
 		return nil, &RPCError{Code: "terminal/unavailable", Message: err.Error()}
+	}
+	if slave != nil {
+		_ = slave.Close()
 	}
 	s.terminals[sessionID][id] = terminal
 	s.terminalMu.Unlock()
@@ -290,9 +327,11 @@ func (t *terminalRecord) infoLocked() map[string]any {
 	return info
 }
 
-func (t *terminalRecord) readOutput(reader *io.PipeReader, done chan<- struct{}) {
+func (t *terminalRecord) readOutput(reader io.Reader, done chan<- struct{}) {
 	defer close(done)
-	defer reader.Close()
+	if closer, ok := reader.(io.Closer); ok {
+		defer closer.Close()
+	}
 	buffer := make([]byte, 32<<10)
 	for {
 		read, err := reader.Read(buffer)
@@ -327,7 +366,9 @@ func (t *terminalRecord) appendOutput(data []byte) {
 
 func (t *terminalRecord) wait(writer *io.PipeWriter, readDone <-chan struct{}) {
 	err := t.cmd.Wait()
-	_ = writer.Close()
+	if writer != nil {
+		_ = writer.Close()
+	}
 	<-readDone
 	exitCode := 0
 	state := "exited"
@@ -443,7 +484,12 @@ func (t *terminalRecord) resizeFrom(controller string, cols, rows int) error {
 	}
 	t.cols = clampTerminal(cols, 2, 500)
 	t.rows = clampTerminal(rows, 1, 200)
+	master := t.master
+	pty := t.pty
 	t.mu.Unlock()
+	if pty && master != nil {
+		_ = setPTYSize(master, cols, rows)
+	}
 	t.broadcastState()
 	return nil
 }
@@ -456,10 +502,14 @@ func (t *terminalRecord) close() {
 	}
 	t.closed = true
 	stdin := t.stdin
+	master := t.master
 	cancel := t.cancel
 	process := t.cmd.Process
 	t.mu.Unlock()
 	_ = stdin.Close()
+	if master != nil {
+		_ = master.Close()
+	}
 	if process != nil && runtime.GOOS != "windows" {
 		_ = syscall.Kill(-process.Pid, syscall.SIGTERM)
 	}

@@ -217,6 +217,50 @@ func TestWorkspaceRPCConfinesAndReadsFiles(t *testing.T) {
 	}
 }
 
+func TestNativeTerminalPTYGeometry(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	server.getOrCreateSession("pty-session", "")
+	if _, rpcErr := server.dispatchRPC(context.Background(), "terminal/create", map[string]any{
+		"agentId": "pty-session",
+		"request": map[string]any{"id": "pty-1", "cols": 80, "rows": 24},
+	}); rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	terminal := server.terminal("pty-session", "pty-1")
+	if terminal == nil || !terminal.pty {
+		t.Fatal("terminal did not allocate a PTY")
+	}
+	waitScreen := func(want string) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			terminal.mu.Lock()
+			screen := string(terminal.screen)
+			terminal.mu.Unlock()
+			if strings.Contains(screen, want) {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		terminal.mu.Lock()
+		screen := string(terminal.screen)
+		terminal.mu.Unlock()
+		t.Fatalf("terminal screen never contained %q: %q", want, screen)
+	}
+	if err := terminal.writeFrom("", "stty size\n"); err != nil {
+		t.Fatal(err)
+	}
+	waitScreen("24 80")
+	if err := terminal.resizeFrom("", 100, 30); err != nil {
+		t.Fatal(err)
+	}
+	if err := terminal.writeFrom("", "stty size\n"); err != nil {
+		t.Fatal(err)
+	}
+	waitScreen("30 100")
+}
+
 func TestNativeTerminalRPCAndDuplexMux(t *testing.T) {
 	server, ts, cleanup := setupTestServer(t)
 	defer cleanup()
