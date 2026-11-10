@@ -145,8 +145,12 @@ func (s *Session) readLoop(r io.Reader) {
 }
 
 func (s *Session) waitLoop() {
-	err := s.cmd.Wait()
+	// Cmd.Wait closes StdoutPipe after observing process exit. Calling it while
+	// readLoop is still draining can therefore discard the complete output of a
+	// short-lived command. The child closes stdout itself on exit, so drain to
+	// EOF first and only then reap it.
 	<-s.readDone
+	err := s.cmd.Wait()
 	s.mu.Lock()
 	if s.reason == WaitClosed {
 		s.reason = WaitExited
