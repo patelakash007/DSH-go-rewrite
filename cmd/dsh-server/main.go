@@ -109,6 +109,8 @@ type Server struct {
 
 	controlMu   sync.Mutex
 	controlSubs map[string]chan map[string]any
+
+	settings *nativeSettings
 }
 
 func newServer(port int, homeDir string) (*Server, error) {
@@ -189,6 +191,13 @@ func newServerWithWorkspace(port int, homeDir, workspaceDir string) (*Server, er
 		_ = dbStore.Close()
 		return nil, fmt.Errorf("load native workspace state: %w", err)
 	}
+	settings, err := newNativeSettings(filepath.Join(homeDir, "native-settings.json"))
+	if err != nil {
+		_ = dbStore.Close()
+		return nil, fmt.Errorf("load native settings: %w", err)
+	}
+	s.settings = settings
+	defaultPermission, _ := settings.getString("native-engine", "defaultPermission")
 
 	// Restore known sessions from SQLite
 	ctx := context.Background()
@@ -209,7 +218,7 @@ func newServerWithWorkspace(port int, homeDir, workspaceDir string) (*Server, er
 					UpdatedAt:  evs[len(evs)-1].Time,
 					Cwd:        files.Root(),
 					Model:      "deepseek-chat",
-					Permission: "auto",
+					Permission: defaultPermission,
 					Log:        logStore,
 					Subs:       make(map[string]chan []byte),
 					Requests:   make(map[string]struct{}),
@@ -256,7 +265,7 @@ func (s *Server) getOrCreateSession(rawId string, cwd string) *SessionRecord {
 		Log:        session.NewSessionLog(sID),
 		Subs:       make(map[string]chan []byte),
 		Requests:   make(map[string]struct{}),
-		Permission: "auto",
+		Permission: s.defaultPermission(),
 	}
 	s.sessions[rawId] = rec
 	s.attachSession(rec)
@@ -505,6 +514,9 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		cwd, _ := reqMap["cwd"].(string)
 		workspaceID, _ := reqMap["workspaceId"].(string)
 		agentPreset, _ := reqMap["agentPreset"].(string)
+		if agentPreset == "" {
+			agentPreset, _ = s.settings.getString("agent-preset-registry", "selectedDefault")
+		}
 		if agentPreset != "" && agentPreset != "native" {
 			return nil, &RPCError{Code: "agent-preset/not-found", Message: "agent preset not found"}
 		}
@@ -872,6 +884,7 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		return map[string]any{}, nil
 
 	case "permissionPresets/catalog":
+		defaultPreset := s.defaultPermission()
 		return map[string]any{
 			"options": []map[string]any{
 				{"value": "read-only", "name": "Read Only"},
@@ -879,7 +892,7 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 				{"value": "danger-full-access", "name": "Full Access"},
 			},
 			"defaultOptions": []any{},
-			"defaultPreset":  "auto",
+			"defaultPreset":  defaultPreset,
 		}, nil
 
 	case "workspace/archiveSession", "workspace/unarchiveSession":
@@ -898,8 +911,13 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 	case "llm/listProviders":
 		return []map[string]any{{"id": "deepseek", "name": "DeepSeek"}}, nil
 
-	case "llm/listConfigurableProviders", "commands/list", "pluginManager/listBundles", "pluginManager/listPlugins":
+	case "llm/listConfigurableProviders", "pluginManager/listBundles", "pluginManager/listPlugins":
 		return []any{}, nil
+
+	case "commands/list":
+		return []map[string]any{
+			{"name": "permission", "description": "Change the native tool permission preset", "definitionId": "permission", "input": map[string]any{"hint": "read-only | auto | danger-full-access"}},
+		}, nil
 
 	case "skills/list":
 		return s.listSkills(args)
@@ -942,8 +960,8 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		_, _ = rec.Log.Append(session.AgentPresetChangeData{Preset: preset})
 		return preset, nil
 
-	case "settings/describe":
-		return map[string]any{"writable": false, "namespaces": []any{}}, nil
+	case "settings/describe", "settings/mutate", "settings/update":
+		return s.dispatchSettingsRPC(endpoint, args)
 
 	case "pluginInventory/list":
 		return map[string]any{"managementAvailable": false, "entries": []any{}, "agentPresets": []any{}}, nil

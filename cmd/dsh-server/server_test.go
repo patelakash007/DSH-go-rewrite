@@ -699,6 +699,39 @@ func TestNativeFileAndSessionReferenceCandidates(t *testing.T) {
 	}
 }
 
+func TestNativeSettingsAndCommandCatalogue(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	description, rpcErr := server.dispatchRPC(context.Background(), "settings/describe", map[string]any{})
+	if rpcErr != nil || len(description.(map[string]any)["namespaces"].([]map[string]any)) != 2 {
+		t.Fatalf("settings description = %#v, %+v", description, rpcErr)
+	}
+	updated, rpcErr := server.dispatchRPC(context.Background(), "settings/mutate", map[string]any{
+		"ns": "native-engine", "expectedRevision": 0,
+		"ops": []any{map[string]any{"op": "set", "path": []any{"defaultPermission"}, "value": "read-only"}},
+	})
+	if rpcErr != nil || updated.(map[string]any)["revision"] != 1 {
+		t.Fatalf("settings update = %#v, %+v", updated, rpcErr)
+	}
+	if _, conflict := server.dispatchRPC(context.Background(), "settings/mutate", map[string]any{
+		"ns": "native-engine", "expectedRevision": 0,
+		"ops": []any{map[string]any{"op": "set", "path": []any{"defaultPermission"}, "value": "auto"}},
+	}); conflict == nil || conflict.Code != "settings/conflict" {
+		t.Fatalf("settings conflict = %+v", conflict)
+	}
+	rec := server.getOrCreateSession("settings-session", "")
+	if rec.Permission != "read-only" {
+		t.Fatalf("new session permission = %q", rec.Permission)
+	}
+	commands, rpcErr := server.dispatchRPC(context.Background(), "commands/list", map[string]any{"agentId": rec.ID.Raw()})
+	if rpcErr != nil || len(commands.([]map[string]any)) != 1 || commands.([]map[string]any)[0]["name"] != "permission" {
+		t.Fatalf("commands = %#v, %+v", commands, rpcErr)
+	}
+	if _, err := os.Stat(server.settings.path); err != nil {
+		t.Fatalf("settings document not persisted: %v", err)
+	}
+}
+
 func getAuthCookie(t *testing.T, server *Server, ts *httptest.Server) *http.Cookie {
 	t.Helper()
 	client := &http.Client{
