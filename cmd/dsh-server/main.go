@@ -112,6 +112,7 @@ type Server struct {
 
 	settings *nativeSettings
 	feedback *feedbackStore
+	jobs     *jobManager
 }
 
 func newServer(port int, homeDir string) (*Server, error) {
@@ -204,6 +205,7 @@ func newServerWithWorkspace(port int, homeDir, workspaceDir string) (*Server, er
 		return nil, fmt.Errorf("load native message feedback: %w", err)
 	}
 	s.feedback = feedback
+	s.jobs = newJobManager()
 	defaultPermission, _ := settings.getString("native-engine", "defaultPermission")
 
 	// Restore known sessions from SQLite
@@ -1020,6 +1022,9 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 	case "messageFeedback/list", "messageFeedback/put", "messageFeedback/delete":
 		return s.dispatchMessageFeedback(endpoint, args)
 
+	case "job/kill":
+		return s.dispatchJobRPC(endpoint, args)
+
 	case "session/search":
 		query, _ := args["query"].(string)
 		if query == "" {
@@ -1080,6 +1085,7 @@ func (s *Server) close() {
 		pending.once.Do(func() { pending.result <- false })
 	}
 	s.closeAllTerminals()
+	s.closeAllJobs()
 }
 
 // Broadcast an event to all subscribers of a session and persist it.
@@ -1682,6 +1688,30 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 				}(streamId, ch)
+			} else if endpoint == "job/list" {
+				removeSubscription(streamId)
+				args, _ := payload["args"].(map[string]any)
+				if args == nil {
+					args = payload
+				}
+				request, _ := args["request"].(map[string]any)
+				sessionID, _ := request["sessionId"].(string)
+				go s.openJobList(sessionID, func(value map[string]any) error {
+					return safeWrite(map[string]any{"type": "item", "streamId": streamId, "value": value})
+				})
+			} else if endpoint == "job/follow" {
+				removeSubscription(streamId)
+				args, _ := payload["args"].(map[string]any)
+				if args == nil {
+					args = payload
+				}
+				request, _ := args["request"].(map[string]any)
+				sessionID, _ := request["sessionId"].(string)
+				jobID, _ := request["jobId"].(string)
+				from := int64(numberArg(request, "from", 0))
+				go s.openJobFollow(sessionID, jobID, from, func(value map[string]any) error {
+					return safeWrite(map[string]any{"type": "item", "streamId": streamId, "value": value})
+				})
 			} else if endpoint == "session/control" {
 				removeSubscription(streamId)
 				key, updates := s.addControlSubscriber()
@@ -1867,6 +1897,7 @@ func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	s.sessionsMu.Unlock()
 	s.closeSessionTerminals(sIDStr)
+	s.jobs.closeSession(sIDStr)
 	s.removeSessionFromWorkspaceState(sIDStr)
 	s.feedback.removeSession(sIDStr)
 

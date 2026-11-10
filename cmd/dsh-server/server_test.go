@@ -732,6 +732,73 @@ func TestNativeSettingsAndCommandCatalogue(t *testing.T) {
 	}
 }
 
+func TestNativeBackgroundJobs(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	rec := server.getOrCreateSession("job-session", "")
+	job, err := server.startShellJob(rec.ID.Raw(), "printf 'job-output\\n'; sleep 0.2; printf 'job-done\\n'", rec.Cwd, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.ID == "" || job.Status != "running" {
+		t.Fatalf("job = %#v", job)
+	}
+	listed := server.jobs.list(rec.ID.Raw())
+	if len(listed) != 1 || listed[0].ID != job.ID {
+		t.Fatalf("job list = %#v", listed)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		job.mu.Lock()
+		status := job.Status
+		job.mu.Unlock()
+		if status != "running" && status != "stopping" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	job.mu.Lock()
+	status := job.Status
+	output := ""
+	for _, chunk := range job.chunks {
+		output += chunk.Text
+	}
+	job.mu.Unlock()
+	if status != "completed" || !strings.Contains(output, "job-output") || !strings.Contains(output, "job-done") {
+		t.Fatalf("job status=%s output=%q", status, output)
+	}
+	if len(server.jobs.list(rec.ID.Raw())) != 0 {
+		t.Fatal("finished job was not removed from the live list")
+	}
+
+	slow, err := server.startShellJob(rec.ID.Raw(), "sleep 30", rec.Cwd, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	killed, rpcErr := server.dispatchRPC(context.Background(), "job/kill", map[string]any{
+		"request": map[string]any{"sessionId": rec.ID.Raw(), "jobId": slow.ID},
+	})
+	if rpcErr != nil || killed.(map[string]any)["outcome"] != "requested" {
+		t.Fatalf("job kill = %#v, %+v", killed, rpcErr)
+	}
+	select {
+	case <-slow.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("killed job did not finish")
+	}
+	slow.mu.Lock()
+	slowStatus := slow.Status
+	slow.mu.Unlock()
+	if slowStatus != "killed" {
+		t.Fatalf("killed job status = %q", slowStatus)
+	}
+	if _, rpcErr := server.dispatchRPC(context.Background(), "job/kill", map[string]any{
+		"request": map[string]any{"sessionId": rec.ID.Raw(), "jobId": "missing-job"},
+	}); rpcErr == nil || rpcErr.Code != "job/not-found" {
+		t.Fatalf("missing job kill = %+v", rpcErr)
+	}
+}
+
 func TestNativeMessageFeedbackLifecycle(t *testing.T) {
 	server, _, cleanup := setupTestServer(t)
 	defer cleanup()

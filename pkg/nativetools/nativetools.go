@@ -33,9 +33,13 @@ const (
 	maxSearchWalk = 10_000
 )
 
+type BackgroundRunner func(ctx context.Context, command, cwd string, timeout time.Duration) (map[string]any, error)
+
 type Registry struct {
 	fs  *nativefs.Service
 	cwd func() string
+
+	background BackgroundRunner
 
 	tools  []*tools.Tool
 	byName map[string]*tools.Tool
@@ -72,8 +76,17 @@ func New(files *nativefs.Service, cwd func() string) *Registry {
 			"cwd":       stringSchema("Working directory relative to the workspace"),
 			"timeoutMs": integerSchema("Timeout in milliseconds (maximum 120000)"),
 		}, "command"), TimeoutMs: 120_000, Execute: r.shell},
+		&tools.Tool{Name: "shell_background", Description: "Start a long-running command in the background and return its job id", Schema: objectSchema(map[string]*tools.JsonSchemaNode{
+			"command":   stringSchema("Shell command"),
+			"cwd":       stringSchema("Working directory relative to the workspace"),
+			"timeoutMs": integerSchema("Optional timeout in milliseconds (maximum 3600000)"),
+		}, "command"), Execute: r.shellBackground},
 	)
 	return r
+}
+
+func (r *Registry) SetBackgroundRunner(runner BackgroundRunner) {
+	r.background = runner
 }
 
 func (r *Registry) register(definitions ...*tools.Tool) {
@@ -255,6 +268,36 @@ func (r *Registry) searchFiles(ctx context.Context, input map[string]any) (any, 
 		return matches[i].Path < matches[j].Path
 	})
 	return map[string]any{"matches": matches, "truncated": truncated, "filesScanned": walked}, nil
+}
+
+func (r *Registry) shellBackground(ctx context.Context, input map[string]any) (any, error) {
+	if r.background == nil {
+		return nil, errors.New("background jobs are unavailable in this engine")
+	}
+	command := textArg(input, "command")
+	if strings.TrimSpace(command) == "" {
+		return nil, errors.New("shell_background requires a command")
+	}
+	cwdArg := textArg(input, "cwd")
+	if cwdArg == "" {
+		cwdArg = "."
+	}
+	cwd, err := r.fs.Resolve(r.currentCwd(), cwdArg)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(cwd)
+	if err != nil || !info.IsDir() {
+		return nil, &nativefs.Error{Code: nativefs.ErrNotDir, Path: cwdArg, Err: err}
+	}
+	timeoutMs := intArg(input, "timeoutMs", 0)
+	if timeoutMs < 0 {
+		timeoutMs = 0
+	}
+	if timeoutMs > 3_600_000 {
+		timeoutMs = 3_600_000
+	}
+	return r.background(ctx, command, cwd, time.Duration(timeoutMs)*time.Millisecond)
 }
 
 func (r *Registry) shell(ctx context.Context, input map[string]any) (any, error) {

@@ -92,6 +92,13 @@ func (s *Server) ensureAgent(rec *SessionRecord) *agent.Agent {
 		return rec.Cwd
 	})
 	rec.Skills = s.ensureSkillRegistryLocked(rec)
+	rec.Tools.SetBackgroundRunner(func(_ context.Context, command, cwd string, timeout time.Duration) (map[string]any, error) {
+		job, err := s.startShellJob(rec.ID.Raw(), command, cwd, timeout)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"jobId": job.ID, "status": "running", "label": job.Label}, nil
+	})
 
 	pipeline := tools.NewPipeline()
 	pipeline.UsePre(func(execution *tools.ExecContext, next waterfall.NextFunc) error {
