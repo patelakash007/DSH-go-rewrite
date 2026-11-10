@@ -196,7 +196,7 @@ func (r *Registry) searchFiles(ctx context.Context, input map[string]any) (any, 
 			return ctx.Err()
 		}
 		if entry.IsDir() {
-			if filePath != start && (entry.Name() == ".git" || entry.Name() == "node_modules") {
+			if filePath != start && (entry.Name() == ".git" || entry.Name() == ".dsh" || entry.Name() == "node_modules") {
 				return filepath.SkipDir
 			}
 			return nil

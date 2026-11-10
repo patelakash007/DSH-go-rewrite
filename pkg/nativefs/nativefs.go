@@ -188,6 +188,15 @@ func (s *Service) List(cwd, path string, maxEntries int) (Listing, error) {
 	if err != nil {
 		return Listing{}, pathError(path, err)
 	}
+	if resolved == s.root {
+		visible := children[:0]
+		for _, child := range children {
+			if child.Name() != ".dsh" {
+				visible = append(visible, child)
+			}
+		}
+		children = visible
+	}
 	sort.Slice(children, func(i, j int) bool { return children[i].Name() < children[j].Name() })
 	if maxEntries <= 0 {
 		maxEntries = DefaultMaxEntries
