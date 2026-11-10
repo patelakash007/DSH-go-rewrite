@@ -866,6 +866,36 @@ func (s *Server) sessionByID(sessionID string) *SessionRecord {
 	return s.sessions[sessionID]
 }
 
+func (s *Server) close() {
+	s.sessionsMu.RLock()
+	records := make([]*SessionRecord, 0, len(s.sessions))
+	for _, rec := range s.sessions {
+		records = append(records, rec)
+	}
+	s.sessionsMu.RUnlock()
+	for _, rec := range records {
+		rec.mu.Lock()
+		runtimeAgent := rec.Agent
+		rec.mu.Unlock()
+		if runtimeAgent != nil {
+			runtimeAgent.Dispose()
+		}
+		if rec.stopLog != nil {
+			rec.stopLog()
+		}
+	}
+	s.hostMu.Lock()
+	approvals := make([]*pendingApproval, 0, len(s.pendingApprovals))
+	for _, pending := range s.pendingApprovals {
+		approvals = append(approvals, pending)
+	}
+	s.pendingApprovals = map[string]*pendingApproval{}
+	s.hostMu.Unlock()
+	for _, pending := range approvals {
+		pending.once.Do(func() { pending.result <- false })
+	}
+}
+
 // Broadcast an event to all subscribers of a session and persist it.
 func (s *Server) broadcastEvent(rec *SessionRecord, evType string, evData any) map[string]any {
 	rec.mu.Lock()
@@ -1615,6 +1645,7 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	server.close()
 	_ = httpServer.Shutdown(ctx)
 	_ = server.dbStore.Close()
 }
