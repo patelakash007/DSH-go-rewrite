@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -13,10 +14,18 @@ import (
 
 	"github.com/JopenChen/dsh-go/pkg/brand"
 	"github.com/JopenChen/dsh-go/pkg/llm"
+	"github.com/JopenChen/dsh-go/pkg/llm/provider_anthropic"
 	"github.com/JopenChen/dsh-go/pkg/llm/provider_openai"
 )
 
 const piAiSettingsNamespace = "llm-pi-ai"
+
+func deepSeekAnthropicBase() string {
+	if override := os.Getenv("DSH_DEEPSEEK_ANTHROPIC_ORIGIN"); override != "" {
+		return strings.TrimRight(override, "/")
+	}
+	return "https://api.deepseek.com/anthropic/v1"
+}
 
 var providerRoutePattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 
@@ -50,6 +59,17 @@ func (r *providerRouter) Chat(ctx context.Context, request llm.ChatRequest, call
 			return llm.Usage{}, fmt.Errorf("native engine has no DeepSeek adapter")
 		}
 		return r.server.adapter.Chat(ctx, request, callback)
+	}
+	if provider == "deepseek-account" {
+		token, configured := r.server.accountToken()
+		if !configured {
+			return llm.Usage{}, &llm.LlmFailure{Kind: llm.FailInvalidCredential, Message: "sign in to DeepSeek to use the account provider"}
+		}
+		adapter := provider_anthropic.New(provider_anthropic.Config{
+			Route: "deepseek-account", BaseURL: deepSeekAnthropicBase(),
+			APIKey: token, AuthHeader: "x-dsh-auth-token",
+		})
+		return adapter.Chat(ctx, request, callback)
 	}
 	profile := r.server.settings.providerProfile(provider)
 	if profile == nil {
@@ -256,6 +276,19 @@ func (s *Server) providerCatalog() map[string]any {
 		},
 	}}
 	routable := []string{"deepseek"}
+	if _, signedIn := s.accountToken(); signedIn {
+		groups = append(groups, map[string]any{
+			"id": "deepseek-account", "name": "DeepSeek Account",
+			"models": []map[string]any{
+				{"id": "deepseek-chat", "name": "DeepSeek-V3", "description": "DeepSeek-V3 through the signed-in account"},
+				{"id": "deepseek-reasoner", "name": "DeepSeek-R1", "description": "DeepSeek-R1 through the signed-in account", "reasoning": map[string]any{
+					"efforts":       []map[string]any{{"id": "low", "name": "Low"}, {"id": "high", "name": "High"}},
+					"defaultEffort": "high",
+				}},
+			},
+		})
+		routable = append(routable, "deepseek-account")
+	}
 	for _, profile := range s.settings.providerProfiles() {
 		if len(profile.Models) == 0 {
 			continue

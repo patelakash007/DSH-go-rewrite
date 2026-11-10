@@ -1292,12 +1292,24 @@ func TestNativeDeepSeekAccountSignIn(t *testing.T) {
 			_, _ = w.Write([]byte(`{"code":0,"data":{"biz_code":0,"biz_data":{"normal_wallets":[{"currency":"USD","balance":"1.50"}],"bonus_wallets":[]}}}`))
 		case "/auth-api/v0/users/logout":
 			_, _ = w.Write([]byte(`{"code":0,"data":{"biz_code":0,"biz_data":{}}}`))
+		case "/anthropic/v1/messages":
+			if r.Header.Get("x-dsh-auth-token") != "native-token" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n\n"))
+			_, _ = w.Write([]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\n"))
+			_, _ = w.Write([]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"account reply\"}}\n\n"))
+			_, _ = w.Write([]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"))
+			_, _ = w.Write([]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	defer platform.Close()
 	t.Setenv("DSH_DEEPSEEK_PLATFORM_ORIGIN", platform.URL)
+	t.Setenv("DSH_DEEPSEEK_ANTHROPIC_ORIGIN", platform.URL+"/anthropic/v1")
 
 	server, ts, cleanup := setupTestServer(t)
 	defer cleanup()
@@ -1345,6 +1357,39 @@ func TestNativeDeepSeekAccountSignIn(t *testing.T) {
 	wallets, _ := balance.(map[string]any)["value"].([]any)
 	if len(wallets) != 1 || wallets[0].(map[string]any)["balance"] != "1.50" {
 		t.Fatalf("account balance = %#v", balance)
+	}
+	catalog, rpcErr := server.dispatchRPC(context.Background(), "session/modelCatalog", map[string]any{})
+	if rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	accountGroup := false
+	for _, group := range catalog.(map[string]any)["groups"].([]map[string]any) {
+		if group["id"] == "deepseek-account" {
+			accountGroup = true
+		}
+	}
+	if !accountGroup {
+		t.Fatalf("account model group missing from %#v", catalog)
+	}
+	chatSession := server.getOrCreateSession("account-chat", "")
+	if _, rpcErr := server.dispatchRPC(context.Background(), "session/selectModel", map[string]any{
+		"request": map[string]any{
+			"sessionId": chatSession.ID.Raw(), "provider": "deepseek-account", "model": "deepseek-chat",
+		},
+	}); rpcErr != nil {
+		t.Fatalf("select account model: %+v", rpcErr)
+	}
+	var reply strings.Builder
+	usage, err := server.router.Chat(context.Background(), llm.ChatRequest{
+		Provider: "deepseek-account", Model: "deepseek-chat",
+		Messages: []llm.Message{llm.NewUserMessage("hello")},
+	}, func(chunk llm.StreamChunk) {
+		if chunk.Kind == llm.ChunkText {
+			reply.WriteString(chunk.Text)
+		}
+	})
+	if err != nil || reply.String() != "account reply" || usage.PromptTokens != 3 {
+		t.Fatalf("account chat = %q, %#v, %v", reply.String(), usage, err)
 	}
 	signedOut, rpcErr := server.dispatchRPC(context.Background(), "account/signOut", map[string]any{})
 	if rpcErr != nil || signedOut.(map[string]any)["status"] != "signed-out" {

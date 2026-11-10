@@ -320,10 +320,19 @@ func (s *Server) getOrCreateSession(rawId string, cwd string) *SessionRecord {
 	sID := brand.NewSessionID(rawId)
 	now := time.Now()
 	cwd = s.nativeSessionCwd(cwd)
+	provider, _ := s.settings.getString("native-engine", "defaultProvider")
+	if provider == "" {
+		provider = "deepseek"
+	}
+	model, _ := s.settings.getString("native-engine", "defaultModel")
+	if model == "" {
+		model = "deepseek-chat"
+	}
 	rec := &SessionRecord{
 		ID:         sID,
 		Cwd:        cwd,
-		Model:      "deepseek-chat",
+		Model:      model,
+		Provider:   provider,
 		CreatedAt:  now,
 		UpdatedAt:  now,
 		Log:        session.NewSessionLog(sID),
@@ -781,6 +790,14 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		return s.dispatchUpdateQueue(args)
 
 	case "session/initializeDefaultModel":
+		if _, signedIn := s.accountToken(); signedIn {
+			key, configured := s.credStore.Resolve(ctx, brand.NewCredentialRef("DEEPSEEK_API_KEY"))
+			if !configured || strings.TrimSpace(key) == "" {
+				_, _ = s.settings.update("native-engine", map[string]any{
+					"defaultProvider": "deepseek-account", "defaultModel": "deepseek-chat",
+				}, nil)
+			}
+		}
 		return map[string]any{}, nil
 
 	case "session/cancel":
@@ -836,7 +853,11 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 			if provider == "" {
 				provider = "deepseek"
 			}
-			if provider != "deepseek" {
+			if provider == "deepseek-account" {
+				if _, signedIn := s.accountToken(); !signedIn {
+					return nil, &RPCError{Code: "session/model-unavailable", Message: "sign in to DeepSeek to use the account provider"}
+				}
+			} else if provider != "deepseek" {
 				profile := s.settings.providerProfile(provider)
 				if profile == nil {
 					return nil, &RPCError{Code: "session/model-unavailable", Message: "provider is not configured"}
