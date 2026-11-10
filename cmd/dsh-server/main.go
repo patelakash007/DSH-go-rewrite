@@ -989,6 +989,9 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 	case "goals/get", "goals/create", "goals/edit", "goals/pause", "goals/resume", "goals/complete", "goals/clear":
 		return s.dispatchGoalRPC(endpoint, args)
 
+	case "fileReferences/list", "sessionReferenceResolver/candidates":
+		return s.dispatchReferences(endpoint, args)
+
 	case "session/search":
 		query, _ := args["query"].(string)
 		if query == "" {

@@ -665,6 +665,40 @@ func TestNativeAgentPresetCatalogueAndSelection(t *testing.T) {
 	}
 }
 
+func TestNativeFileAndSessionReferenceCandidates(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	source := server.getOrCreateSession("reference-source", "")
+	other := server.getOrCreateSession("reference-other", "")
+	_, _ = other.Log.Append(session.SessionTitleData{Title: "Other conversation", Source: "user"})
+	if err := os.MkdirAll(filepath.Join(source.Cwd, "src"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source.Cwd, "src", "native.go"), []byte("package native"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files, rpcErr := server.dispatchRPC(context.Background(), "fileReferences/list", map[string]any{
+		"agentId": source.ID.Raw(), "query": "native",
+	})
+	if rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	fileRows := files.([]map[string]any)
+	if len(fileRows) != 1 || fileRows[0]["path"] != "src/native.go" {
+		t.Fatalf("file references = %#v", fileRows)
+	}
+	sessions, rpcErr := server.dispatchRPC(context.Background(), "sessionReferenceResolver/candidates", map[string]any{
+		"agentId": source.ID.Raw(), "query": "Other",
+	})
+	if rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	sessionRows := sessions.([]map[string]any)
+	if len(sessionRows) != 1 || sessionRows[0]["sessionId"] != other.ID.Raw() || !strings.HasPrefix(sessionRows[0]["mention"].(string), "@[Other conversation](dsh-session:") {
+		t.Fatalf("session references = %#v", sessionRows)
+	}
+}
+
 func getAuthCookie(t *testing.T, server *Server, ts *httptest.Server) *http.Cookie {
 	t.Helper()
 	client := &http.Client{
