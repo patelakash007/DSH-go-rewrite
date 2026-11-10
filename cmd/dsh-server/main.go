@@ -1063,15 +1063,27 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		return map[string]any{"ok": false, "reason": "missing"}, nil
 
 	case "pluginManager/registries":
-		return []any{}, nil
+		return map[string]any{}, nil
 
 	case "pluginManager/inspect":
-		return map[string]any{"found": false}, nil
-
-	case "pluginManager/setPluginEnabled", "pluginManager/setBundleEnabled", "pluginManager/removeBundle", "pluginManager/cancelInstall", "pluginManager/waitForInstall", "pluginManager/installBundle":
 		return map[string]any{
-			"ok": false, "code": "plugin-manager/unsupported",
-			"message": "Native plugin installation is not available yet; the standalone engine does not run Node packages.",
+			"status": "refused", "problem": "unknown",
+			"reason": "Native plugin inspection is not available yet; the standalone engine does not run Node packages.",
+		}, nil
+
+	case "pluginManager/cancelInstall":
+		return map[string]any{"status": "notRunning"}, nil
+
+	case "pluginManager/waitForInstall":
+		return nil, nil
+
+	case "pluginManager/setPluginEnabled", "pluginManager/setBundleEnabled", "pluginManager/removeBundle", "pluginManager/installBundle":
+		return map[string]any{
+			"changed": false, "application": "failed",
+			"error": map[string]any{
+				"code":       "operation-error",
+				"diagnostic": "Native plugin installation is not available yet; the standalone engine does not run Node packages.",
+			},
 		}, nil
 
 	case "session/search":

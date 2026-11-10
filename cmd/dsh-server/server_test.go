@@ -796,8 +796,12 @@ func TestNativeAccountAndAppAuthStates(t *testing.T) {
 		t.Fatalf("cordis inventory = %#v, %+v", inventory, rpcErr)
 	}
 	install, rpcErr := server.dispatchRPC(context.Background(), "pluginManager/installBundle", map[string]any{})
-	if rpcErr != nil || install.(map[string]any)["code"] != "plugin-manager/unsupported" {
+	if rpcErr != nil || install.(map[string]any)["application"] != "failed" {
 		t.Fatalf("plugin install = %#v, %+v", install, rpcErr)
+	}
+	inspect, rpcErr := server.dispatchRPC(context.Background(), "pluginManager/inspect", map[string]any{"spec": "missing"})
+	if rpcErr != nil || inspect.(map[string]any)["status"] != "refused" {
+		t.Fatalf("plugin inspect = %#v, %+v", inspect, rpcErr)
 	}
 }
 
