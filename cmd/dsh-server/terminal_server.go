@@ -35,12 +35,13 @@ type terminalRecord struct {
 	cols      int
 	rows      int
 
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	master *os.File
-	pty    bool
-	cancel context.CancelFunc
-	done   chan struct{}
+	cmd      *exec.Cmd
+	stdin    io.WriteCloser
+	master   *os.File
+	masterFD int
+	pty      bool
+	cancel   context.CancelFunc
+	done     chan struct{}
 
 	mu         sync.Mutex
 	screen     []byte
@@ -191,6 +192,7 @@ func (s *Server) createTerminal(_ context.Context, sessionID, id, shellPath, cwd
 		command.Stderr = slaveFile
 		command.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 		terminal.master = master
+		terminal.masterFD = int(master.Fd())
 		terminal.pty = true
 		terminal.stdin = master
 		reader = master
@@ -484,12 +486,10 @@ func (t *terminalRecord) resizeFrom(controller string, cols, rows int) error {
 	}
 	t.cols = clampTerminal(cols, 2, 500)
 	t.rows = clampTerminal(rows, 1, 200)
-	master := t.master
-	pty := t.pty
-	t.mu.Unlock()
-	if pty && master != nil {
-		_ = setPTYSize(master, cols, rows)
+	if t.pty && !t.closed {
+		_ = setPTYSizeFD(t.masterFD, t.cols, t.rows)
 	}
+	t.mu.Unlock()
 	t.broadcastState()
 	return nil
 }
@@ -505,11 +505,11 @@ func (t *terminalRecord) close() {
 	master := t.master
 	cancel := t.cancel
 	process := t.cmd.Process
-	t.mu.Unlock()
-	_ = stdin.Close()
 	if master != nil {
 		_ = master.Close()
 	}
+	t.mu.Unlock()
+	_ = stdin.Close()
 	if process != nil && runtime.GOOS != "windows" {
 		_ = syscall.Kill(-process.Pid, syscall.SIGTERM)
 	}

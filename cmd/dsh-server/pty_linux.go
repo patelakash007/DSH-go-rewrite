@@ -38,7 +38,16 @@ func setPTYSize(file *os.File, cols, rows int) error {
 	if file == nil {
 		return fmt.Errorf("terminal is not a PTY")
 	}
-	return unix.IoctlSetWinsize(int(file.Fd()), unix.TIOCSWINSZ, &unix.Winsize{
+	return setPTYSizeFD(int(file.Fd()), cols, rows)
+}
+
+// setPTYSizeFD resizes a PTY by descriptor. Callers must serialize it with the
+// file's close so the descriptor cannot be reused mid-ioctl.
+func setPTYSizeFD(fd int, cols, rows int) error {
+	if fd < 0 {
+		return fmt.Errorf("terminal is not a PTY")
+	}
+	return unix.IoctlSetWinsize(fd, unix.TIOCSWINSZ, &unix.Winsize{
 		Col: uint16(cols), Row: uint16(rows),
 	})
 }

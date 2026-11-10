@@ -14,3 +14,7 @@ func openPTY() (*os.File, *os.File, error) {
 func setPTYSize(file *os.File, cols, rows int) error {
 	return errors.New("PTY resize is not supported on this platform")
 }
+
+func setPTYSizeFD(fd int, cols, rows int) error {
+	return errors.New("PTY resize is not supported on this platform")
+}
