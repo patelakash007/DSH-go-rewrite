@@ -732,6 +732,106 @@ func TestNativeSettingsAndCommandCatalogue(t *testing.T) {
 	}
 }
 
+type blockingAdapter struct {
+	started chan struct{}
+	release chan struct{}
+	mu      sync.Mutex
+	calls   int
+}
+
+func (a *blockingAdapter) Name() string { return "blocking" }
+
+func (a *blockingAdapter) Chat(ctx context.Context, _ llm.ChatRequest, callback func(llm.StreamChunk)) (llm.Usage, error) {
+	a.mu.Lock()
+	a.calls++
+	call := a.calls
+	a.mu.Unlock()
+	if call == 1 {
+		close(a.started)
+		select {
+		case <-a.release:
+		case <-ctx.Done():
+			return llm.Usage{}, ctx.Err()
+		}
+	}
+	callback(llm.StreamChunk{Kind: llm.ChunkText, Text: "reply"})
+	return llm.Usage{PromptTokens: 1, CompletionTokens: 1}, nil
+}
+
+func TestNativePromptQueueAndSteering(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	adapter := &blockingAdapter{started: make(chan struct{}), release: make(chan struct{})}
+	server.adapter = adapter
+	if err := server.credStore.Set(context.Background(), brand.NewCredentialRef("DEEPSEEK_API_KEY"), "test-key"); err != nil {
+		t.Fatal(err)
+	}
+	rec := server.getOrCreateSession("queue-session", "")
+	prompt := func(requestID, text, mode string) {
+		t.Helper()
+		if _, rpcErr := server.dispatchRPC(context.Background(), "session/prompt", map[string]any{
+			"request": map[string]any{
+				"sessionId": rec.ID.Raw(), "requestId": requestID, "mode": mode,
+				"content": []any{map[string]any{"type": "text", "text": text}},
+			},
+		}); rpcErr != nil {
+			t.Fatalf("prompt %s: %+v", requestID, rpcErr)
+		}
+	}
+	prompt("queue-first", "first", "queue")
+	select {
+	case <-adapter.started:
+	case <-time.After(time.Second):
+		t.Fatal("first turn did not start")
+	}
+	prompt("queue-second", "second", "queue")
+	prompt("queue-third", "third", "steer")
+	rec.mu.Lock()
+	if len(rec.Queue) != 2 || rec.Queue[0].RequestID != "queue-third" || rec.Queue[1].RequestID != "queue-second" {
+		rec.mu.Unlock()
+		t.Fatalf("queue = %#v", rec.Queue)
+	}
+	secondID := rec.Queue[1].ID
+	rec.mu.Unlock()
+	if _, rpcErr := server.dispatchRPC(context.Background(), "session/updateQueue", map[string]any{
+		"request": map[string]any{
+			"sessionId": rec.ID.Raw(), "itemId": secondID,
+			"action": map[string]any{"kind": "edit", "content": []any{map[string]any{"type": "text", "text": "second edited"}}},
+		},
+	}); rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	rec.mu.Lock()
+	edited := rec.Queue[1].Text
+	rec.mu.Unlock()
+	if edited != "second edited" {
+		t.Fatalf("edited queue item = %q", edited)
+	}
+	close(adapter.release)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		rec.mu.Lock()
+		idle := rec.Cancel == nil && len(rec.Queue) == 0
+		rec.mu.Unlock()
+		if idle {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	adapter.mu.Lock()
+	calls := adapter.calls
+	adapter.mu.Unlock()
+	if calls < 3 {
+		t.Fatalf("adapter calls = %d, want at least 3", calls)
+	}
+	rec.mu.Lock()
+	remaining := len(rec.Queue)
+	rec.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("queue remaining = %d", remaining)
+	}
+}
+
 func TestNativeSchedulesLifecycle(t *testing.T) {
 	server, _, cleanup := setupTestServer(t)
 	defer cleanup()

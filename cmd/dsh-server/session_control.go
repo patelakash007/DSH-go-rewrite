@@ -22,8 +22,10 @@ func (s *Server) sessionProjection(rec *SessionRecord) map[string]any {
 		permission = "auto"
 	}
 	blank := len(rec.Events) == 0
+	inbox := inboxProjectionLocked(rec)
 	rec.mu.Unlock()
 	values := map[string]any{
+		"inbox":       inbox,
 		"title":       title,
 		"permissions": map[string]any{"currentValue": permission},
 		"modelSelection": map[string]any{

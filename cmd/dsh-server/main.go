@@ -69,7 +69,15 @@ type SessionRecord struct {
 	attemptTurn     uint64
 	attemptStep     uint64
 	attemptEnded    bool
+	Queue           []queuedPrompt
 	mu              sync.Mutex
+}
+
+type queuedPrompt struct {
+	ID        string
+	RequestID string
+	Text      string
+	CreatedAt time.Time
 }
 
 // Server encapsulates the DSH HTTP/WebSocket backend.
@@ -582,11 +590,13 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		if modelName == "" {
 			modelName = "deepseek-chat"
 		}
+		inbox := inboxProjectionLocked(rec)
 		rec.mu.Unlock()
 
 		return map[string]any{
 			"asOfSeq": asOfSeq,
 			"values": map[string]any{
+				"inbox": inbox,
 				"title": title,
 				"permissions": map[string]any{
 					"currentValue": "auto",
@@ -655,14 +665,26 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 			return nil, &RPCError{Code: "gateway/bad-request", Message: "prompt content is empty"}
 		}
 
+		mode, _ := reqMap["mode"].(string)
 		rec.mu.Lock()
 		if _, duplicate := rec.Requests[reqId]; duplicate {
 			rec.mu.Unlock()
 			return map[string]any{"requestId": reqId}, nil
 		}
 		wasRunning := rec.Cancel != nil
-		rec.RunID = reqId
 		rec.Requests[reqId] = struct{}{}
+		if wasRunning {
+			item := queuedPrompt{ID: uuid.MustV4(), RequestID: reqId, Text: promptText, CreatedAt: time.Now()}
+			if mode == "steer" {
+				rec.Queue = append([]queuedPrompt{item}, rec.Queue...)
+			} else {
+				rec.Queue = append(rec.Queue, item)
+			}
+			rec.mu.Unlock()
+			s.broadcastInbox(rec)
+			return map[string]any{"requestId": reqId}, nil
+		}
+		rec.RunID = reqId
 		rec.mu.Unlock()
 
 		rec.mu.Lock()
@@ -680,7 +702,7 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		rec.Cancel = func() { runtimeAgent.Cancel(agent.CancelUser) }
 		rec.mu.Unlock()
 		var enqueueErr error
-		if wasRunning || runtimeAgent.Status() == agent.StatusRunning {
+		if runtimeAgent.Status() == agent.StatusRunning {
 			enqueueErr = runtimeAgent.FollowupRequest(promptText, reqId)
 		} else {
 			enqueueErr = runtimeAgent.RunRequest(promptText, reqId)
@@ -688,14 +710,18 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		if enqueueErr != nil {
 			rec.mu.Lock()
 			delete(rec.Requests, reqId)
-			if !wasRunning {
-				rec.Cancel = nil
-				rec.RunID = ""
-			}
+			rec.Cancel = nil
+			rec.RunID = ""
 			rec.mu.Unlock()
 			return nil, &RPCError{Code: "session/queue-full", Message: enqueueErr.Error()}
 		}
 		return map[string]any{"requestId": reqId}, nil
+
+	case "session/updateQueue":
+		return s.dispatchUpdateQueue(args)
+
+	case "session/initializeDefaultModel":
+		return map[string]any{}, nil
 
 	case "session/cancel":
 		reqMap, _ := args["request"].(map[string]any)

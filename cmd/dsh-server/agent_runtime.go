@@ -166,6 +166,7 @@ func (s *Server) onSessionEvent(rec *SessionRecord, event session.SessionEvent) 
 		log.Printf("persist native session %s seq %d: %v", rec.ID.Raw(), event.Seq, err)
 	}
 	mapped := mapSessionEvent(event)
+	shouldStartNext := false
 	rec.mu.Lock()
 	rec.Events = append(rec.Events, mapped)
 	rec.UpdatedAt = event.Time
@@ -184,6 +185,7 @@ func (s *Server) onSessionEvent(rec *SessionRecord, event session.SessionEvent) 
 		if data.Status == string(agent.StatusIdle) {
 			rec.Cancel = nil
 			rec.RunID = ""
+			shouldStartNext = true
 		}
 	}
 	frame := map[string]any{"type": "item", "value": map[string]any{"type": "event", "event": mapped}}
@@ -195,6 +197,9 @@ func (s *Server) onSessionEvent(rec *SessionRecord, event session.SessionEvent) 
 		}
 	}
 	rec.mu.Unlock()
+	if shouldStartNext {
+		s.startNextQueued(rec)
+	}
 
 	s.handleAssistantStreamEvent(rec, event)
 	s.broadcastSessionControl(rec, event.Seq)
