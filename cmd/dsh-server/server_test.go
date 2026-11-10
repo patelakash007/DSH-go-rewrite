@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1162,6 +1163,36 @@ func TestNativeAccountAndAppAuthStates(t *testing.T) {
 	inspect, rpcErr := server.dispatchRPC(context.Background(), "pluginManager/inspect", map[string]any{"spec": "missing"})
 	if rpcErr != nil || inspect.(map[string]any)["status"] != "refused" {
 		t.Fatalf("plugin inspect = %#v, %+v", inspect, rpcErr)
+	}
+}
+
+func TestNativeCompactCommand(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	server.adapter = &recordingAdapter{requests: make(chan llm.ChatRequest, 4)}
+	rec := server.getOrCreateSession("compact-session", "")
+	for index := 0; index < 3; index++ {
+		_, _ = rec.Log.Append(session.UserMessageData{Content: fmt.Sprintf("question %d", index)})
+		_, _ = rec.Log.Append(session.AssistantMessageData{Content: fmt.Sprintf("answer %d", index)})
+	}
+	result, rpcErr := server.dispatchRPC(context.Background(), "commands/execute", map[string]any{
+		"agentId": rec.ID.Raw(), "line": "/compact",
+	})
+	if rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	commandResult, _ := result.(map[string]any)["result"].(map[string]any)
+	if commandResult["kind"] != "success" {
+		t.Fatalf("compact result = %#v", result)
+	}
+	found := false
+	for _, event := range session.EffectiveEvents(rec.Log.Events()) {
+		if data, ok := event.Data.(session.AssistantMessageData); ok && data.Content == "native reply" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("compaction summary is missing from the effective history")
 	}
 }
 

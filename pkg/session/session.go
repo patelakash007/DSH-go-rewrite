@@ -1204,6 +1204,12 @@ func (sl *SessionLog) OpenStep() (uint64, bool) {
 }
 
 func (sl *SessionLog) Append(data EventData) (uint64, error) {
+	return sl.AppendWithSurface(data, nil)
+}
+
+// AppendWithSurface appends one event with a surface operation, used by
+// compaction to replace an old event range with a summary.
+func (sl *SessionLog) AppendWithSurface(data EventData, op *SurfaceOp) (uint64, error) {
 	sl.mu.Lock()
 
 	now := time.Now()
@@ -1213,10 +1219,11 @@ func (sl *SessionLog) Append(data EventData) (uint64, error) {
 
 	sl.seq++
 	ev := SessionEvent{
-		Seq:  sl.seq,
-		Time: now,
-		Type: data.EventType(),
-		Data: data,
+		Seq:       sl.seq,
+		Time:      now,
+		Type:      data.EventType(),
+		Data:      data,
+		SurfaceOp: op,
 	}
 
 	if err := sl.applyState(ev); err != nil {

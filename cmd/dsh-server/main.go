@@ -1073,6 +1073,19 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 			_, _ = rec.Log.Append(session.PresetChangeData{Preset: preset})
 			return map[string]any{"commandId": uuid.MustV4(), "result": map[string]any{"kind": "success", "text": "Permission preset: " + preset}}, nil
 		}
+		if len(fields) == 1 && fields[0] == "/compact" {
+			text, err := s.compactSession(ctx, rec)
+			if err != nil {
+				return map[string]any{
+					"commandId": uuid.MustV4(),
+					"result":    map[string]any{"kind": "error", "text": err.Error()},
+				}, nil
+			}
+			return map[string]any{
+				"commandId": uuid.MustV4(),
+				"result":    map[string]any{"kind": "success", "text": text},
+			}, nil
+		}
 		return nil, &RPCError{Code: "commands/not-found", Message: "native engine does not implement this command"}
 
 	case "$events/result":
