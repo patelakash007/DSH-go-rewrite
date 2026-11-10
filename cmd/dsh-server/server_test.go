@@ -732,6 +732,83 @@ func TestNativeSettingsAndCommandCatalogue(t *testing.T) {
 	}
 }
 
+func TestNativeMessageFeedbackLifecycle(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	adapter := &recordingAdapter{requests: make(chan llm.ChatRequest, 1)}
+	server.adapter = adapter
+	if err := server.credStore.Set(context.Background(), brand.NewCredentialRef("DEEPSEEK_API_KEY"), "test-key"); err != nil {
+		t.Fatal(err)
+	}
+	rec := server.getOrCreateSession("feedback-session", "")
+	if _, rpcErr := server.dispatchRPC(context.Background(), "session/prompt", map[string]any{
+		"request": map[string]any{
+			"sessionId": rec.ID.Raw(), "requestId": "feedback-turn",
+			"content": []any{map[string]any{"type": "text", "text": "reply for feedback"}},
+		},
+	}); rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	select {
+	case <-adapter.requests:
+	case <-time.After(time.Second):
+		t.Fatal("model request did not start")
+	}
+	var messageID string
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && messageID == "" {
+		rec.mu.Lock()
+		for _, event := range rec.Events {
+			if event["type"] == "assistant/message" {
+				data, _ := event["data"].(map[string]any)
+				message, _ := data["message"].(map[string]any)
+				messageID, _ = message["id"].(string)
+			}
+		}
+		rec.mu.Unlock()
+		if messageID == "" {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if messageID == "" {
+		t.Fatal("assistant message id not found")
+	}
+	put, rpcErr := server.dispatchRPC(context.Background(), "messageFeedback/put", map[string]any{
+		"request": map[string]any{
+			"sessionId": rec.ID.Raw(), "messageId": messageID, "rating": "positive",
+			"note": "Useful", "category": "task-result", "ifVersion": nil,
+		},
+	})
+	if rpcErr != nil || put.(map[string]any)["ok"] != true {
+		t.Fatalf("feedback put = %#v, %+v", put, rpcErr)
+	}
+	item := put.(map[string]any)["value"].(*feedbackItem)
+	if item.Version == "" || item.MessageID != messageID {
+		t.Fatalf("feedback item = %#v", item)
+	}
+	conflict, rpcErr := server.dispatchRPC(context.Background(), "messageFeedback/put", map[string]any{
+		"request": map[string]any{
+			"sessionId": rec.ID.Raw(), "messageId": messageID, "rating": "negative", "ifVersion": "stale",
+		},
+	})
+	if rpcErr != nil || conflict.(map[string]any)["ok"] != false {
+		t.Fatalf("feedback conflict = %#v, %+v", conflict, rpcErr)
+	}
+	listed, _ := server.dispatchRPC(context.Background(), "messageFeedback/list", map[string]any{
+		"request": map[string]any{"sessionId": rec.ID.Raw()},
+	})
+	items := listed.(map[string]any)["value"].(map[string]any)["items"].([]*feedbackItem)
+	if len(items) != 1 || items[0].Version != item.Version {
+		t.Fatalf("feedback list = %#v", listed)
+	}
+	deleted, rpcErr := server.dispatchRPC(context.Background(), "messageFeedback/delete", map[string]any{
+		"request": map[string]any{"sessionId": rec.ID.Raw(), "messageId": messageID, "ifVersion": item.Version},
+	})
+	if rpcErr != nil || deleted.(map[string]any)["ok"] != true {
+		t.Fatalf("feedback delete = %#v, %+v", deleted, rpcErr)
+	}
+}
+
 func getAuthCookie(t *testing.T, server *Server, ts *httptest.Server) *http.Cookie {
 	t.Helper()
 	client := &http.Client{

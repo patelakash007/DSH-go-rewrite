@@ -111,6 +111,7 @@ type Server struct {
 	controlSubs map[string]chan map[string]any
 
 	settings *nativeSettings
+	feedback *feedbackStore
 }
 
 func newServer(port int, homeDir string) (*Server, error) {
@@ -197,6 +198,12 @@ func newServerWithWorkspace(port int, homeDir, workspaceDir string) (*Server, er
 		return nil, fmt.Errorf("load native settings: %w", err)
 	}
 	s.settings = settings
+	feedback, err := newFeedbackStore(filepath.Join(homeDir, "message-feedback.json"))
+	if err != nil {
+		_ = dbStore.Close()
+		return nil, fmt.Errorf("load native message feedback: %w", err)
+	}
+	s.feedback = feedback
 	defaultPermission, _ := settings.getString("native-engine", "defaultPermission")
 
 	// Restore known sessions from SQLite
@@ -1009,6 +1016,9 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 
 	case "fileReferences/list", "sessionReferenceResolver/candidates":
 		return s.dispatchReferences(endpoint, args)
+
+	case "messageFeedback/list", "messageFeedback/put", "messageFeedback/delete":
+		return s.dispatchMessageFeedback(endpoint, args)
 
 	case "session/search":
 		query, _ := args["query"].(string)
@@ -1858,6 +1868,7 @@ func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
 	s.sessionsMu.Unlock()
 	s.closeSessionTerminals(sIDStr)
 	s.removeSessionFromWorkspaceState(sIDStr)
+	s.feedback.removeSession(sIDStr)
 
 	_ = s.dbStore.Delete(r.Context(), brand.NewSessionID(sIDStr))
 
