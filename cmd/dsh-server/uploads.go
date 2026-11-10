@@ -132,6 +132,32 @@ func (s *uploadStore) put(sessionID, name string, reader io.Reader) (*uploadedFi
 	return &copy, nil
 }
 
+func (s *uploadStore) cloneSession(sourceSessionID, targetSessionID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	clones := make([]*uploadedFile, 0)
+	for _, upload := range s.byID {
+		if upload.SessionID != sourceSessionID {
+			continue
+		}
+		copy := *upload
+		copy.ReceiptID = uuid.MustV4()
+		copy.AttachmentID = uuid.MustV4()
+		copy.SessionID = targetSessionID
+		copy.CreatedAt = time.Now().UnixMilli()
+		clones = append(clones, &copy)
+	}
+	for _, clone := range clones {
+		metadata, _ := json.MarshalIndent(clone, "", "  ")
+		metadata = append(metadata, '\n')
+		if err := atomicUploadMetadata(filepath.Join(s.dir, clone.ReceiptID+".json"), metadata); err != nil {
+			return err
+		}
+		s.byID[clone.ReceiptID] = clone
+	}
+	return nil
+}
+
 func (s *uploadStore) findAttachment(sessionID, attachmentID string) *uploadedFile {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

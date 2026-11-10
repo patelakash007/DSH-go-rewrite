@@ -784,8 +784,21 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 			if provider == "" {
 				provider = "deepseek"
 			}
-			if provider != "deepseek" && s.settings.providerProfile(provider) == nil {
-				return nil, &RPCError{Code: "session/model-unavailable", Message: "provider is not configured"}
+			if provider != "deepseek" {
+				profile := s.settings.providerProfile(provider)
+				if profile == nil {
+					return nil, &RPCError{Code: "session/model-unavailable", Message: "provider is not configured"}
+				}
+				found := false
+				for _, candidate := range profile.Models {
+					if candidate.ID == model {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return nil, &RPCError{Code: "session/model-unavailable", Message: "model is not declared by this provider"}
+				}
 			}
 			rec.mu.Lock()
 			rec.Model = model
@@ -1671,6 +1684,7 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 				if providerName == "" {
 					providerName = "deepseek"
 				}
+				inbox := inboxProjectionLocked(rec)
 
 				// Register sub
 				ch := make(chan []byte, 100)
@@ -1698,6 +1712,7 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 						"projections": map[string]any{
 							"asOfSeq": cursor,
 							"values": map[string]any{
+								"inbox": inbox,
 								"title": title,
 								"permissions": map[string]any{
 									"currentValue": "auto",

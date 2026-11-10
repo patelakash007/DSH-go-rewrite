@@ -70,6 +70,7 @@ func (s *Server) forkSession(ctx context.Context, args map[string]any) (any, *RP
 	s.sessions[childID.Raw()] = child
 	s.sessionsMu.Unlock()
 	s.attachSession(child)
+	_ = s.uploads.cloneSession(source.ID.Raw(), childID.Raw())
 	_, _ = child.Log.Append(session.EndSeedData{ParentSession: source.ID})
 	_, _ = child.Log.Append(session.SessionTitleData{Title: title, Source: "fallback"})
 	s.emitHost(map[string]any{"type": "emit", "event": "api-session/added", "args": []any{map[string]any{
