@@ -91,6 +91,7 @@ func (s *Server) ensureAgent(rec *SessionRecord) *agent.Agent {
 		defer rec.mu.Unlock()
 		return rec.Cwd
 	})
+	rec.Skills = s.ensureSkillRegistryLocked(rec)
 
 	pipeline := tools.NewPipeline()
 	pipeline.UsePre(func(execution *tools.ExecContext, next waterfall.NextFunc) error {
@@ -131,11 +132,21 @@ func (s *Server) ensureAgent(rec *SessionRecord) *agent.Agent {
 
 	system := sysprompt.New()
 	system.Register("native-runtime", 100, "You are running inside DSH's standalone Android-native Go engine. Use the provided workspace tools. Do not assume Ubuntu, PRoot, Termux, Node.js, npm, bash, or paths under /root exist. Keep file operations inside the app-owned workspace.")
+	if catalog := rec.Skills.CatalogText(); catalog != "" {
+		system.Register("skills", 90, catalog)
+	}
 	rec.Agent = agent.NewAgent(rec.ID, rec.Log, system, pipeline, nativeAdapter{server: s}, agent.AgentOptions{
 		Provider: "deepseek", Model: rec.Model, DefaultTimeout: 15 * time.Minute,
 	})
-	rec.Agent.SetTools(rec.Tools.Tools()...)
-	rec.Agent.SetToolProvider(rec.Tools.Lookup)
+	definitions := rec.Tools.Tools()
+	definitions = append(definitions, nativeSkillTool(rec.Skills))
+	rec.Agent.SetTools(definitions...)
+	rec.Agent.SetToolProvider(func(name string) *tools.Tool {
+		if name == "load_skill" {
+			return nativeSkillTool(rec.Skills)
+		}
+		return rec.Tools.Lookup(name)
+	})
 	return rec.Agent
 }
 

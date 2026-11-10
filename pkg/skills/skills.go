@@ -147,15 +147,18 @@ func scanDir(dir string, rank int) []*Skill {
 	}
 	var out []*Skill
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+		name := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
+		path := filepath.Join(dir, e.Name())
+		if e.IsDir() {
+			path = filepath.Join(path, "SKILL.md")
+			name = e.Name()
+		} else if !strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
 			continue
 		}
-		path := filepath.Join(dir, e.Name())
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
-		name := strings.TrimSuffix(e.Name(), ".md")
 		s := parseSkill(name, path, string(data), rank)
 		if s != nil {
 			out = append(out, s)
@@ -170,18 +173,54 @@ func parseSkill(name, path, text string, rank int) *Skill {
 	modelInv := true
 	userInv := true
 	var bodyLines []string
-	for _, ln := range lines {
-		trim := strings.TrimSpace(ln)
-		low := strings.ToLower(trim)
-		if strings.HasPrefix(low, "description") || strings.HasPrefix(low, "**description**") {
-			desc = strings.Trim(strings.TrimSpace(strings.SplitN(trim, ":", 2)[0]), "*")
+	inFrontmatter := len(lines) > 0 && strings.TrimSpace(lines[0]) == "---"
+	frontmatterClosed := !inFrontmatter
+	for index, ln := range lines {
+		if index == 0 && inFrontmatter {
 			continue
 		}
-		if strings.Contains(low, "model-invocable: false") {
+		trim := strings.TrimSpace(ln)
+		low := strings.ToLower(trim)
+		if inFrontmatter && !frontmatterClosed {
+			if trim == "---" {
+				frontmatterClosed = true
+				continue
+			}
+			parts := strings.SplitN(trim, ":", 2)
+			if len(parts) == 2 {
+				key := strings.ToLower(strings.TrimSpace(parts[0]))
+				value := strings.Trim(strings.TrimSpace(parts[1]), `"'`)
+				switch key {
+				case "name":
+					if value != "" {
+						name = value
+					}
+				case "description":
+					desc = value
+				case "model-invocable":
+					modelInv = !strings.EqualFold(value, "false")
+				case "user-invocable":
+					userInv = !strings.EqualFold(value, "false")
+				case "disable-model-invocation":
+					modelInv = !strings.EqualFold(value, "true")
+				case "disable-user-invocation":
+					userInv = !strings.EqualFold(value, "true")
+				}
+			}
+			continue
+		}
+		if strings.HasPrefix(low, "description:") || strings.HasPrefix(low, "**description**:") {
+			parts := strings.SplitN(trim, ":", 2)
+			if len(parts) == 2 {
+				desc = strings.TrimSpace(parts[1])
+			}
+			continue
+		}
+		if strings.Contains(low, "model-invocable: false") || strings.Contains(low, "disable-model-invocation: true") {
 			modelInv = false
 			continue
 		}
-		if strings.Contains(low, "user-invocable: false") {
+		if strings.Contains(low, "user-invocable: false") || strings.Contains(low, "disable-user-invocation: true") {
 			userInv = false
 			continue
 		}

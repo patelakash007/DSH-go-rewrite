@@ -527,6 +527,144 @@ func TestNativeSessionForkPersistsClosedPrefix(t *testing.T) {
 	}
 }
 
+func TestNativeWorkspaceDirectoryAndPinLifecycle(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	baseline := server.workspaceBaselineLocked()
+	value := baseline["value"].(map[string]any)
+	if len(value["items"].([]map[string]any)) != 1 {
+		t.Fatalf("default workspace baseline = %#v", baseline)
+	}
+
+	createdPath, rpcErr := server.dispatchRPC(context.Background(), "directoryPicker/createDirectory", map[string]any{
+		"path": server.workspaceDir, "name": "project-one",
+	})
+	if rpcErr != nil {
+		t.Fatalf("create directory: %+v", rpcErr)
+	}
+	level, rpcErr := server.dispatchRPC(context.Background(), "directoryPicker/list", map[string]any{"path": server.workspaceDir})
+	if rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	entries := level.(map[string]any)["entries"].([]map[string]any)
+	foundProject := false
+	for _, entry := range entries {
+		foundProject = foundProject || entry["path"] == createdPath
+	}
+	if !foundProject {
+		t.Fatalf("directory level = %#v", level)
+	}
+
+	created, rpcErr := server.dispatchRPC(context.Background(), "workspace/create", map[string]any{
+		"request": map[string]any{"path": createdPath},
+	})
+	if rpcErr != nil {
+		t.Fatalf("create workspace: %+v", rpcErr)
+	}
+	workspace := created.(map[string]any)["workspace"].(map[string]any)
+	workspaceID := workspace["workspaceId"].(string)
+	if created.(map[string]any)["created"] != true || workspaceID == "" {
+		t.Fatalf("workspace create = %#v", created)
+	}
+	renamed, rpcErr := server.dispatchRPC(context.Background(), "workspace/rename", map[string]any{
+		"request": map[string]any{"workspaceId": workspaceID, "title": "Native Project"},
+	})
+	if rpcErr != nil || renamed.(map[string]any)["workspace"].(map[string]any)["title"] != "Native Project" {
+		t.Fatalf("workspace rename = %#v, %+v", renamed, rpcErr)
+	}
+
+	sessionValue, rpcErr := server.dispatchRPC(context.Background(), "session/create", map[string]any{
+		"request": map[string]any{"workspaceId": workspaceID, "sessionId": "workspace-session"},
+	})
+	if rpcErr != nil || sessionValue.(map[string]any)["sessionId"] != "workspace-session" {
+		t.Fatalf("workspace session = %#v, %+v", sessionValue, rpcErr)
+	}
+	rec := server.sessionByID("workspace-session")
+	if rec.Cwd != createdPath {
+		t.Fatalf("workspace cwd = %q, want %q", rec.Cwd, createdPath)
+	}
+	if attached := server.workspaceByID(workspaceID); attached == nil || !containsString(attached.SessionIDs, "workspace-session") {
+		t.Fatalf("attached workspace = %#v", attached)
+	}
+
+	pinned, rpcErr := server.dispatchRPC(context.Background(), "workspace/pinSession", map[string]any{
+		"request": map[string]any{"sessionId": "workspace-session"},
+	})
+	if rpcErr != nil || !containsString(pinned.(map[string]any)["pinnedSessionIds"].([]string), "workspace-session") {
+		t.Fatalf("pin = %#v, %+v", pinned, rpcErr)
+	}
+	server.setSessionArchived("workspace-session", true)
+	server.workspaceMu.Lock()
+	stillPinned := containsString(server.pinnedSessions, "workspace-session")
+	server.workspaceMu.Unlock()
+	if stillPinned {
+		t.Fatal("archiving did not clear the pin")
+	}
+	if _, err := os.Stat(server.workspaceStatePath); err != nil {
+		t.Fatalf("workspace state not persisted: %v", err)
+	}
+	if _, rpcErr := server.dispatchRPC(context.Background(), "workspace/delete", map[string]any{
+		"request": map[string]any{"workspaceId": workspaceID},
+	}); rpcErr != nil {
+		t.Fatalf("delete workspace: %+v", rpcErr)
+	}
+	if _, err := os.Stat(createdPath.(string)); err != nil {
+		t.Fatalf("workspace delete removed folder: %v", err)
+	}
+}
+
+func TestNativeSkillDiscoveryAndLoading(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	rec := server.getOrCreateSession("skill-session", "")
+	skillDir := filepath.Join(rec.Cwd, ".dsh", "skills", "native-review")
+	if err := os.MkdirAll(skillDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: native-review\ndescription: Review native Android changes\nmodel-invocable: true\nuser-invocable: true\n---\nAlways inspect the native boundary.\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	value, rpcErr := server.dispatchRPC(context.Background(), "skills/list", map[string]any{
+		"request": map[string]any{"sessionId": "skill-session"},
+	})
+	if rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	listed := value.(map[string]any)["skills"].([]map[string]any)
+	if len(listed) != 1 || listed[0]["name"] != "native-review" || listed[0]["description"] != "Review native Android changes" {
+		t.Fatalf("skills = %#v", listed)
+	}
+	registry := server.ensureSkillRegistry(rec)
+	loaded, err := nativeSkillTool(registry).Execute(context.Background(), map[string]any{"name": "native-review"})
+	if err != nil || !strings.Contains(loaded.(string), "Always inspect") {
+		t.Fatalf("loaded skill = %#v, %v", loaded, err)
+	}
+}
+
+func TestNativeAgentPresetCatalogueAndSelection(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	rec := server.getOrCreateSession("preset-session", "")
+	listed, rpcErr := server.dispatchRPC(context.Background(), "agentPresets/list", map[string]any{})
+	if rpcErr != nil || len(listed.(map[string]any)["presets"].([]map[string]any)) != 1 {
+		t.Fatalf("preset list = %#v, %+v", listed, rpcErr)
+	}
+	document, rpcErr := server.dispatchRPC(context.Background(), "agentPresets/read", map[string]any{"agentPreset": "native"})
+	if rpcErr != nil || !strings.Contains(document.(map[string]any)["content"].(string), "id: native") {
+		t.Fatalf("preset document = %#v, %+v", document, rpcErr)
+	}
+	selected, rpcErr := server.dispatchRPC(context.Background(), "agentPresets/select", map[string]any{
+		"agentId": "preset-session", "agentPreset": "native",
+	})
+	if rpcErr != nil || selected != "native" {
+		t.Fatalf("preset selection = %#v, %+v", selected, rpcErr)
+	}
+	if rec.AgentPreset != "native" {
+		t.Fatalf("record preset = %q", rec.AgentPreset)
+	}
+}
+
 func getAuthCookie(t *testing.T, server *Server, ts *httptest.Server) *http.Cookie {
 	t.Helper()
 	client := &http.Client{

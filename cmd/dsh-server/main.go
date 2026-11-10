@@ -33,6 +33,7 @@ import (
 	"github.com/JopenChen/dsh-go/pkg/nativetools"
 	"github.com/JopenChen/dsh-go/pkg/persistence/sqlite"
 	"github.com/JopenChen/dsh-go/pkg/session"
+	"github.com/JopenChen/dsh-go/pkg/skills"
 	"github.com/JopenChen/dsh-go/pkg/storage"
 	"github.com/JopenChen/dsh-go/pkg/uuid"
 )
@@ -43,22 +44,24 @@ var upgrader = websocket.Upgrader{
 
 // SessionRecord represents the in-memory state of an active session.
 type SessionRecord struct {
-	ID         brand.SessionID
-	Title      string
-	Cwd        string
-	Model      string
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-	Log        *session.SessionLog
-	Events     []map[string]any
-	Subs       map[string]chan []byte
-	Cancel     context.CancelFunc
-	RunID      string
-	Requests   map[string]struct{}
-	Permission string
-	Agent      *agent.Agent
-	Tools      *nativetools.Registry
-	stopLog    func()
+	ID          brand.SessionID
+	Title       string
+	Cwd         string
+	Model       string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	Log         *session.SessionLog
+	Events      []map[string]any
+	Subs        map[string]chan []byte
+	Cancel      context.CancelFunc
+	RunID       string
+	Requests    map[string]struct{}
+	Permission  string
+	AgentPreset string
+	Agent       *agent.Agent
+	Tools       *nativetools.Registry
+	Skills      *skills.SkillRegistry
+	stopLog     func()
 
 	attemptID       string
 	attemptRevision int64
@@ -85,9 +88,13 @@ type Server struct {
 	sessionsMu sync.RWMutex
 	sessions   map[string]*SessionRecord
 
-	workspaceMu   sync.Mutex
-	workspaceSubs map[string]chan map[string]any
-	archived      map[string]bool
+	workspaceMu        sync.Mutex
+	workspaceSubs      map[string]chan map[string]any
+	archived           map[string]bool
+	workspaces         map[string]*workspaceRecord
+	workspaceOrder     []string
+	pinnedSessions     []string
+	workspaceStatePath string
 
 	hostMu           sync.Mutex
 	hostSubs         map[string]chan map[string]any
@@ -156,25 +163,31 @@ func newServerWithWorkspace(port int, homeDir, workspaceDir string) (*Server, er
 	dsAdapter := provider_deepseek.NewDeepSeek(credStore)
 
 	s := &Server{
-		port:              port,
-		homeDir:           homeDir,
-		launchToken:       launchToken,
-		clientId:          clientId,
-		dbStore:           dbStore,
-		credStore:         credStore,
-		adapter:           dsAdapter,
-		workspaceDir:      files.Root(),
-		files:             files,
-		uploads:           uploads,
-		sessions:          make(map[string]*SessionRecord),
-		workspaceSubs:     make(map[string]chan map[string]any),
-		archived:          make(map[string]bool),
-		hostSubs:          make(map[string]chan map[string]any),
-		pendingApprovals:  make(map[string]*pendingApproval),
-		terminals:         make(map[string]map[string]*terminalRecord),
-		closedTerminalIDs: make(map[string]bool),
-		goalActivation:    make(map[string]bool),
-		controlSubs:       make(map[string]chan map[string]any),
+		port:               port,
+		homeDir:            homeDir,
+		launchToken:        launchToken,
+		clientId:           clientId,
+		dbStore:            dbStore,
+		credStore:          credStore,
+		adapter:            dsAdapter,
+		workspaceDir:       files.Root(),
+		files:              files,
+		uploads:            uploads,
+		sessions:           make(map[string]*SessionRecord),
+		workspaceSubs:      make(map[string]chan map[string]any),
+		archived:           make(map[string]bool),
+		workspaces:         make(map[string]*workspaceRecord),
+		workspaceStatePath: filepath.Join(homeDir, "workspace-state.json"),
+		hostSubs:           make(map[string]chan map[string]any),
+		pendingApprovals:   make(map[string]*pendingApproval),
+		terminals:          make(map[string]map[string]*terminalRecord),
+		closedTerminalIDs:  make(map[string]bool),
+		goalActivation:     make(map[string]bool),
+		controlSubs:        make(map[string]chan map[string]any),
+	}
+	if err := s.loadWorkspaceState(); err != nil {
+		_ = dbStore.Close()
+		return nil, fmt.Errorf("load native workspace state: %w", err)
 	}
 
 	// Restore known sessions from SQLite
@@ -278,6 +291,7 @@ func (s *Server) setSessionArchived(sessionID string, archived bool) []string {
 	s.workspaceMu.Lock()
 	if archived {
 		s.archived[sessionID] = true
+		s.pinnedSessions = removeString(s.pinnedSessions, sessionID)
 	} else {
 		delete(s.archived, sessionID)
 	}
@@ -286,12 +300,12 @@ func (s *Server) setSessionArchived(sessionID string, archived bool) []string {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	frame := map[string]any{"type": "archived", "archivedSessionIds": ids}
-	for _, ch := range s.workspaceSubs {
-		select {
-		case ch <- frame:
-		default:
-		}
+	_ = s.persistWorkspaceStateLocked()
+	s.broadcastWorkspaceLocked(map[string]any{"type": "archived", "archivedSessionIds": ids})
+	if archived {
+		s.broadcastWorkspaceLocked(map[string]any{
+			"type": "pinned", "pinnedSessionIds": append([]string(nil), s.pinnedSessions...),
+		})
 	}
 	s.workspaceMu.Unlock()
 	return ids
@@ -489,9 +503,29 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 			sIDStr = uuid.MustV4()
 		}
 		cwd, _ := reqMap["cwd"].(string)
+		workspaceID, _ := reqMap["workspaceId"].(string)
 		agentPreset, _ := reqMap["agentPreset"].(string)
+		if agentPreset != "" && agentPreset != "native" {
+			return nil, &RPCError{Code: "agent-preset/not-found", Message: "agent preset not found"}
+		}
+		if workspaceID != "" {
+			workspace := s.workspaceByID(workspaceID)
+			if workspace == nil {
+				return nil, &RPCError{Code: "workspace/not-found", Message: "workspace not found"}
+			}
+			cwd = workspace.Path
+		}
 
 		rec := s.getOrCreateSession(sIDStr, cwd)
+		rec.mu.Lock()
+		if agentPreset == "" {
+			agentPreset = "native"
+		}
+		rec.AgentPreset = agentPreset
+		rec.mu.Unlock()
+		if workspaceID != "" {
+			s.attachSessionToWorkspace(workspaceID, rec.ID.Raw())
+		}
 		return map[string]any{
 			"sessionId":   rec.ID.Raw(),
 			"agentPreset": agentPreset,
@@ -858,6 +892,9 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 			"archivedSessionIds": s.setSessionArchived(sessionID, endpoint == "workspace/archiveSession"),
 		}, nil
 
+	case "workspace/create", "workspace/rename", "workspace/delete", "workspace/insertBefore", "workspace/pinSession", "workspace/unpinSession", "directoryPicker/list", "directoryPicker/createDirectory":
+		return s.dispatchWorkspaceStateRPC(endpoint, args)
+
 	case "llm/listProviders":
 		return []map[string]any{{"id": "deepseek", "name": "DeepSeek"}}, nil
 
@@ -865,10 +902,45 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		return []any{}, nil
 
 	case "skills/list":
-		return map[string]any{"skills": []any{}}, nil
+		return s.listSkills(args)
 
 	case "agentPresets/list":
-		return map[string]any{"presets": []any{}}, nil
+		return map[string]any{"presets": []map[string]any{{
+			"id": "native", "isDefault": true, "name": "Native Agent",
+			"description": "Standalone Android-native DSH agent", "order": 0,
+		}}}, nil
+
+	case "agentPresets/read":
+		preset, _ := args["agentPreset"].(string)
+		if preset != "native" {
+			return nil, &RPCError{Code: "agent-preset/not-found", Message: "agent preset not found"}
+		}
+		return map[string]any{
+			"agentPreset": "native", "name": "Native Agent",
+			"description": "Standalone Android-native DSH agent",
+			"content":     "id: native\nname: Native Agent\ndescription: Standalone Android-native DSH agent\n",
+		}, nil
+
+	case "agentPresets/select":
+		sessionID, _ := args["agentId"].(string)
+		preset, _ := args["agentPreset"].(string)
+		if preset != "native" {
+			return nil, &RPCError{Code: "agent-preset/not-found", Message: "agent preset not found"}
+		}
+		rec := s.sessionByID(sessionID)
+		if rec == nil {
+			return nil, &RPCError{Code: "session/not-found", Message: "session not found"}
+		}
+		for _, event := range rec.Log.Events() {
+			if event.Type == session.EventTurnStart {
+				return nil, &RPCError{Code: "agent-preset/session-not-blank", Message: "agent preset can only change before the first turn"}
+			}
+		}
+		rec.mu.Lock()
+		rec.AgentPreset = preset
+		rec.mu.Unlock()
+		_, _ = rec.Log.Append(session.AgentPresetChangeData{Preset: preset})
+		return preset, nil
 
 	case "settings/describe":
 		return map[string]any{"writable": false, "namespaces": []any{}}, nil
@@ -1565,21 +1637,12 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 				ch := make(chan map[string]any, 16)
 				s.workspaceMu.Lock()
 				s.workspaceSubs[key] = ch
-				archived := make([]string, 0, len(s.archived))
-				for sessionID := range s.archived {
-					archived = append(archived, sessionID)
-				}
-				sort.Strings(archived)
+				baseline := s.workspaceBaselineLocked()
 				s.workspaceMu.Unlock()
 				workspaceSubscriptions[streamId] = workspaceSubscription{key: key, ch: ch}
 				_ = safeWrite(map[string]any{
 					"type": "item", "streamId": streamId,
-					"value": map[string]any{
-						"type": "baseline",
-						"value": map[string]any{
-							"items": []any{}, "archivedSessionIds": archived, "pinnedSessionIds": []any{},
-						},
-					},
+					"value": baseline,
 				})
 				go func(stream string, updates chan map[string]any) {
 					for update := range updates {
@@ -1773,6 +1836,7 @@ func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	s.sessionsMu.Unlock()
 	s.closeSessionTerminals(sIDStr)
+	s.removeSessionFromWorkspaceState(sIDStr)
 
 	_ = s.dbStore.Delete(r.Context(), brand.NewSessionID(sIDStr))
 
