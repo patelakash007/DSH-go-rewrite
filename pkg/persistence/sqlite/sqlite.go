@@ -58,6 +58,18 @@ func Open(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	// Session listeners, forks, search, and shutdown can reach the store from
+	// different goroutines. A single SQLite connection preserves transaction
+	// ordering; WAL plus a busy timeout keeps readers from turning a brief write
+	// overlap into SQLITE_BUSY on Android flash storage.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if _, err := db.Exec(`PRAGMA busy_timeout = 5000`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("persistence/sqlite: set busy timeout: %w", err)
+	}
+	_, _ = db.Exec(`PRAGMA journal_mode = WAL`)
+	_, _ = db.Exec(`PRAGMA synchronous = NORMAL`)
 	if _, err := db.Exec(ddlEvents); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("persistence/sqlite: init events table: %w", err)

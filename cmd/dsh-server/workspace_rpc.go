@@ -84,6 +84,10 @@ func numberArg(values map[string]any, key string, fallback int) int {
 		return value
 	case int64:
 		return int(value)
+	case uint64:
+		return int(value)
+	case uint:
+		return int(value)
 	case float64:
 		return int(value)
 	case json.Number:

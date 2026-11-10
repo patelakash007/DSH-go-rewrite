@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/JopenChen/dsh-go/pkg/brand"
 	"github.com/JopenChen/dsh-go/pkg/llm"
+	"github.com/JopenChen/dsh-go/pkg/session"
 )
 
 type recordingAdapter struct {
@@ -46,6 +48,7 @@ func setupTestServer(t *testing.T) (*Server, *httptest.Server, func()) {
 	mux.HandleFunc("/", server.handleRoot)
 	mux.HandleFunc("/api/remote.mux", server.handleMux)
 	mux.HandleFunc("/api/file", server.handleFile)
+	mux.HandleFunc("/api/session/uploadFileBinary", server.handleUploadBinary)
 	mux.HandleFunc("/api/", server.handleRPC)
 	mux.HandleFunc("/dsh-go/v1/info", server.handleBuildInfo)
 	mux.HandleFunc("/dsh-go/v1/sessions/deletion", server.handleSessionDeletionCapability)
@@ -207,6 +210,320 @@ func TestWorkspaceRPCConfinesAndReadsFiles(t *testing.T) {
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("file status = %d", response.StatusCode)
+	}
+}
+
+func TestNativeTerminalRPCAndDuplexMux(t *testing.T) {
+	server, ts, cleanup := setupTestServer(t)
+	defer cleanup()
+	server.getOrCreateSession("terminal-session", "")
+	created, rpcErr := server.dispatchRPC(context.Background(), "terminal/create", map[string]any{
+		"agentId": "terminal-session",
+		"request": map[string]any{"id": "term-1", "cols": 80.0, "rows": 24.0},
+	})
+	if rpcErr != nil {
+		t.Fatalf("create terminal: %+v", rpcErr)
+	}
+	info, _ := created.(map[string]any)
+	if info["state"] != "running" || info["cwd"] != server.workspaceDir {
+		t.Fatalf("terminal info = %#v", info)
+	}
+	listed, rpcErr := server.dispatchRPC(context.Background(), "terminal/list", map[string]any{"sessionId": "terminal-session"})
+	if rpcErr != nil || len(listed.([]map[string]any)) != 1 {
+		t.Fatalf("terminal list = %#v, %+v", listed, rpcErr)
+	}
+
+	authCookie := getAuthCookie(t, server, ts)
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/api/remote.mux"
+	header := make(http.Header)
+	header.Add("Cookie", authCookie.String())
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+	_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if err := ws.WriteJSON(map[string]any{
+		"type": "open", "streamId": "terminal-attach-1", "endpoint": "terminal/attach",
+		"payload": map[string]any{"args": map[string]any{"agentId": "terminal-session", "id": "term-1"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var first map[string]any
+	if err := ws.ReadJSON(&first); err != nil {
+		t.Fatal(err)
+	}
+	firstValue, _ := first["value"].(map[string]any)
+	if firstValue["type"] != "snapshot" || firstValue["writable"] != true {
+		t.Fatalf("terminal first frame = %#v", first)
+	}
+
+	if err := ws.WriteJSON(map[string]any{
+		"type": "item", "streamId": "terminal-attach-1",
+		"value": map[string]any{"type": "write", "sequence": 1, "data": "echo NATIVE_TERMINAL_OK\n"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seenAck, seenOutput := false, false
+	for !seenAck || !seenOutput {
+		var frame map[string]any
+		if err := ws.ReadJSON(&frame); err != nil {
+			t.Fatalf("read terminal frame: %v", err)
+		}
+		value, _ := frame["value"].(map[string]any)
+		switch value["type"] {
+		case "ack":
+			if numberArg(value, "sequence", 0) == 1 && value["refusal"] == nil {
+				seenAck = true
+			}
+		case "output":
+			if text, _ := value["data"].(string); strings.Contains(text, "NATIVE_TERMINAL_OK") {
+				seenOutput = true
+			}
+		}
+	}
+	if err := ws.WriteJSON(map[string]any{
+		"type": "item", "streamId": "terminal-attach-1",
+		"value": map[string]any{"type": "resize", "sequence": 2, "cols": 120, "rows": 40},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, rpcErr := server.dispatchRPC(context.Background(), "terminal/rename", map[string]any{
+		"agentId": "terminal-session", "id": "term-1", "title": "Native shell",
+	}); rpcErr != nil {
+		t.Fatalf("rename terminal: %+v", rpcErr)
+	}
+	if _, rpcErr := server.dispatchRPC(context.Background(), "terminal/close", map[string]any{
+		"agentId": "terminal-session", "id": "term-1",
+	}); rpcErr != nil {
+		t.Fatalf("close terminal: %+v", rpcErr)
+	}
+	if _, rpcErr := server.dispatchRPC(context.Background(), "terminal/create", map[string]any{
+		"agentId": "terminal-session", "request": map[string]any{"id": "term-1", "cols": 80, "rows": 24},
+	}); rpcErr == nil || rpcErr.Code != "terminal/unavailable" {
+		t.Fatalf("closed id reuse = %+v", rpcErr)
+	}
+}
+
+func TestNativeStreamingAndInlineUploads(t *testing.T) {
+	server, ts, cleanup := setupTestServer(t)
+	defer cleanup()
+	server.getOrCreateSession("upload-session", "")
+	cookie := getAuthCookie(t, server, ts)
+
+	req, _ := http.NewRequest(
+		http.MethodPost,
+		ts.URL+"/api/session/uploadFileBinary?sessionId=upload-session&name=notes.txt",
+		strings.NewReader("native upload"),
+	)
+	req.AddCookie(cookie)
+	response, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("upload status = %d", response.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	value, _ := body["value"].(map[string]any)
+	receiptID, _ := value["receiptId"].(string)
+	file, _ := value["file"].(map[string]any)
+	attachmentID, _ := file["attachmentId"].(string)
+	if receiptID == "" || attachmentID == "" {
+		t.Fatalf("upload response = %#v", body)
+	}
+
+	attachment, rpcErr := server.dispatchRPC(context.Background(), "session/attachment", map[string]any{
+		"request": map[string]any{"sessionId": "upload-session", "attachmentId": attachmentID},
+	})
+	if rpcErr != nil {
+		t.Fatalf("attachment: %+v", rpcErr)
+	}
+	encoded, _ := attachment.(map[string]any)["data"].(string)
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || string(decoded) != "native upload" {
+		t.Fatalf("attachment data = %q, %v", decoded, err)
+	}
+
+	inline, rpcErr := server.dispatchRPC(context.Background(), "fileUploads/upload", map[string]any{
+		"agentId": "upload-session",
+		"request": map[string]any{"name": "inline.bin", "data": base64.StdEncoding.EncodeToString([]byte{1, 2, 3})},
+	})
+	if rpcErr != nil {
+		t.Fatalf("inline upload: %+v", rpcErr)
+	}
+	if inline.(map[string]any)["receiptId"] == "" {
+		t.Fatalf("inline response = %#v", inline)
+	}
+
+	// Metadata is durable: a new store over the same workspace resolves the receipt.
+	reloaded, err := newUploadStore(server.workspaceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if upload := reloaded.get(receiptID); upload == nil || upload.AttachmentID != attachmentID {
+		t.Fatalf("reloaded upload = %#v", upload)
+	}
+}
+
+func TestNativeGoalLifecycleAndProjection(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	rec := server.getOrCreateSession("goal-session", "")
+	created, rpcErr := server.dispatchRPC(context.Background(), "goals/create", map[string]any{
+		"agentId": "goal-session", "request": map[string]any{"objective": "Ship native DSH", "maxGoalRounds": 5},
+	})
+	if rpcErr != nil {
+		t.Fatalf("create goal: %+v", rpcErr)
+	}
+	ref := created.(map[string]any)["ref"].(map[string]any)
+	if ref["id"] == "" || numberArg(ref, "revision", 0) != 1 {
+		t.Fatalf("goal ref = %#v", ref)
+	}
+	view, rpcErr := server.dispatchRPC(context.Background(), "goals/get", map[string]any{"agentId": "goal-session"})
+	if rpcErr != nil || view.(map[string]any)["activation"] != "armed" {
+		t.Fatalf("goal view = %#v, %+v", view, rpcErr)
+	}
+	if _, stale := server.dispatchRPC(context.Background(), "goals/edit", map[string]any{
+		"agentId": "goal-session", "ref": map[string]any{"id": ref["id"], "revision": 0},
+		"request": map[string]any{"objective": "wrong"},
+	}); stale == nil || stale.Code != "GOAL_STALE_REVISION" {
+		t.Fatalf("stale edit = %+v", stale)
+	}
+	edited, rpcErr := server.dispatchRPC(context.Background(), "goals/edit", map[string]any{
+		"agentId": "goal-session", "ref": ref,
+		"request": map[string]any{"objective": "Ship standalone native DSH", "maxGoalRounds": 8},
+	})
+	if rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	editedView := edited.(map[string]any)
+	if editedView["objective"] != "Ship standalone native DSH" || numberArg(editedView, "revision", 0) != 2 {
+		t.Fatalf("edited view = %#v", editedView)
+	}
+	ref = map[string]any{"id": editedView["id"], "revision": editedView["revision"]}
+	paused, rpcErr := server.dispatchRPC(context.Background(), "goals/pause", map[string]any{"agentId": "goal-session", "ref": ref})
+	if rpcErr != nil || paused.(map[string]any)["phase"] != "paused" {
+		t.Fatalf("paused = %#v, %+v", paused, rpcErr)
+	}
+	pausedView := paused.(map[string]any)
+	ref = map[string]any{"id": pausedView["id"], "revision": pausedView["revision"]}
+	resumed, rpcErr := server.dispatchRPC(context.Background(), "goals/resume", map[string]any{"agentId": "goal-session", "ref": ref})
+	if rpcErr != nil || resumed.(map[string]any)["activation"] != "armed" {
+		t.Fatalf("resumed = %#v, %+v", resumed, rpcErr)
+	}
+	resumedView := resumed.(map[string]any)
+	ref = map[string]any{"id": resumedView["id"], "revision": resumedView["revision"]}
+	cleared, rpcErr := server.dispatchRPC(context.Background(), "goals/clear", map[string]any{"agentId": "goal-session", "ref": ref})
+	if rpcErr != nil || cleared.(map[string]any)["id"] != ref["id"] {
+		t.Fatalf("cleared = %#v, %+v", cleared, rpcErr)
+	}
+	missing, rpcErr := server.dispatchRPC(context.Background(), "goals/get", map[string]any{"agentId": "goal-session"})
+	if rpcErr != nil || missing != nil {
+		t.Fatalf("goal after clear = %#v, %+v", missing, rpcErr)
+	}
+
+	projection := goalProjection(rec)
+	if projection != nil {
+		t.Fatalf("projection after clear = %#v", projection)
+	}
+	seenPut, seenClear := false, false
+	rec.mu.Lock()
+	for _, event := range rec.Events {
+		if event["type"] != "goal/change" {
+			continue
+		}
+		data, _ := event["data"].(map[string]any)
+		seenPut = seenPut || data["operation"] == "put"
+		seenClear = seenClear || data["operation"] == "clear"
+	}
+	rec.mu.Unlock()
+	if !seenPut || !seenClear {
+		t.Fatalf("goal event operations: put=%v clear=%v", seenPut, seenClear)
+	}
+}
+
+func TestSessionControlBaselineAndChanges(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	rec := server.getOrCreateSession("control-session", "")
+	key, updates := server.addControlSubscriber()
+	defer server.removeControlSubscriber(key)
+	baseline := server.sessionControlBaseline()
+	value, _ := baseline["value"].(map[string]any)
+	projections, _ := value["projections"].(map[string]any)
+	if projections["control-session"] == nil {
+		t.Fatalf("control baseline = %#v", baseline)
+	}
+	_, _ = rec.Log.Append(session.SessionTitleData{Title: "Controlled", Source: "user"})
+	select {
+	case update := <-updates:
+		if update["sessionId"] != "control-session" || update["changes"] == nil {
+			t.Fatalf("control update = %#v", update)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("session/control did not publish a projection change")
+	}
+}
+
+func TestNativeSessionForkPersistsClosedPrefix(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	rec := server.getOrCreateSession("fork-source", "")
+	adapter := &recordingAdapter{requests: make(chan llm.ChatRequest, 1)}
+	server.adapter = adapter
+	if err := server.credStore.Set(context.Background(), brand.NewCredentialRef("DEEPSEEK_API_KEY"), "test-key"); err != nil {
+		t.Fatal(err)
+	}
+	if _, rpcErr := server.dispatchRPC(context.Background(), "session/prompt", map[string]any{
+		"request": map[string]any{
+			"sessionId": "fork-source", "requestId": "fork-turn",
+			"content": []any{map[string]any{"type": "text", "text": "fork this session"}},
+		},
+	}); rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	select {
+	case <-adapter.requests:
+	case <-time.After(time.Second):
+		t.Fatal("source turn did not start")
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, open := rec.Log.OpenTurn(); !open && rec.Log.LastSeq() > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	forked, rpcErr := server.dispatchRPC(context.Background(), "session/fork", map[string]any{
+		"request": map[string]any{"sessionId": "fork-source"},
+	})
+	if rpcErr != nil {
+		t.Fatalf("fork: %+v", rpcErr)
+	}
+	childID, _ := forked.(map[string]any)["sessionId"].(string)
+	child := server.sessionByID(childID)
+	if child == nil || childID == "fork-source" {
+		t.Fatalf("fork child = %#v", forked)
+	}
+	if _, open := child.Log.OpenTurn(); open {
+		t.Fatal("fork restored an open turn")
+	}
+	if problems := child.Log.Check(); len(problems) != 0 {
+		t.Fatalf("fork invariants = %v", problems)
+	}
+	count, err := server.dbStore.Count(context.Background(), child.ID)
+	if err != nil || count != child.Log.Len() {
+		t.Fatalf("fork persisted events = %d/%d, %v", count, child.Log.Len(), err)
+	}
+	events := child.Log.Events()
+	if len(events) < 2 || events[len(events)-2].Type != session.EventEndSeed || events[len(events)-1].Type != session.EventSessionTitle {
+		t.Fatalf("fork tail = %#v", events)
 	}
 }
 

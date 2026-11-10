@@ -175,6 +175,7 @@ func (s *Server) onSessionEvent(rec *SessionRecord, event session.SessionEvent) 
 	rec.mu.Unlock()
 
 	s.handleAssistantStreamEvent(rec, event)
+	s.broadcastSessionControl(rec, event.Seq)
 	s.emitHost(map[string]any{"type": "emit", "event": "api-session/activity", "args": []any{rec.ID.Raw(), event.Time.UnixMilli()}})
 	switch event.Type {
 	case session.EventTurnStart:
@@ -276,6 +277,24 @@ func mapSessionEvent(event session.SessionEvent) map[string]any {
 			todos = append(todos, map[string]any{"id": fmt.Sprintf("todo-%d", index), "content": item.Content, "status": item.Status})
 		}
 		data = map[string]any{"todos": todos}
+	case session.GoalChangeData:
+		if value.Operation == "clear" {
+			data = map[string]any{
+				"operation": "clear", "ref": map[string]any{"id": value.GoalID, "revision": value.Revision},
+			}
+		} else {
+			goalValue := map[string]any{
+				"id": value.GoalID, "revision": value.Revision, "objective": value.Description,
+				"phase": string(value.Phase), "maxGoalRounds": value.MaxRounds,
+			}
+			if value.BlockReason != nil {
+				goalValue["blockedReason"] = map[string]any{"code": value.BlockReason.Code, "message": value.BlockReason.Message}
+			}
+			data = map[string]any{
+				"operation": "put", "goal": goalValue,
+				"updatedAt": event.Time.UnixMilli(), "createdAt": event.Time.UnixMilli(),
+			}
+		}
 	}
 	return map[string]any{"seq": int(event.Seq), "time": event.Time.UnixMilli(), "type": string(event.Type), "data": data}
 }

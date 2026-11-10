@@ -80,6 +80,7 @@ type Server struct {
 	adapter      llm.LLMAdapter
 	workspaceDir string
 	files        *nativefs.Service
+	uploads      *uploadStore
 
 	sessionsMu sync.RWMutex
 	sessions   map[string]*SessionRecord
@@ -91,6 +92,16 @@ type Server struct {
 	hostMu           sync.Mutex
 	hostSubs         map[string]chan map[string]any
 	pendingApprovals map[string]*pendingApproval
+
+	terminalMu        sync.Mutex
+	terminals         map[string]map[string]*terminalRecord
+	closedTerminalIDs map[string]bool
+
+	goalMu         sync.Mutex
+	goalActivation map[string]bool
+
+	controlMu   sync.Mutex
+	controlSubs map[string]chan map[string]any
 }
 
 func newServer(port int, homeDir string) (*Server, error) {
@@ -108,6 +119,10 @@ func newServerWithWorkspace(port int, homeDir, workspaceDir string) (*Server, er
 	files, err := nativefs.New(workspaceDir)
 	if err != nil {
 		return nil, fmt.Errorf("initialize native workspace: %w", err)
+	}
+	uploads, err := newUploadStore(files.Root())
+	if err != nil {
+		return nil, fmt.Errorf("initialize native uploads: %w", err)
 	}
 
 	// Launch Token (32 hex characters)
@@ -141,20 +156,25 @@ func newServerWithWorkspace(port int, homeDir, workspaceDir string) (*Server, er
 	dsAdapter := provider_deepseek.NewDeepSeek(credStore)
 
 	s := &Server{
-		port:             port,
-		homeDir:          homeDir,
-		launchToken:      launchToken,
-		clientId:         clientId,
-		dbStore:          dbStore,
-		credStore:        credStore,
-		adapter:          dsAdapter,
-		workspaceDir:     files.Root(),
-		files:            files,
-		sessions:         make(map[string]*SessionRecord),
-		workspaceSubs:    make(map[string]chan map[string]any),
-		archived:         make(map[string]bool),
-		hostSubs:         make(map[string]chan map[string]any),
-		pendingApprovals: make(map[string]*pendingApproval),
+		port:              port,
+		homeDir:           homeDir,
+		launchToken:       launchToken,
+		clientId:          clientId,
+		dbStore:           dbStore,
+		credStore:         credStore,
+		adapter:           dsAdapter,
+		workspaceDir:      files.Root(),
+		files:             files,
+		uploads:           uploads,
+		sessions:          make(map[string]*SessionRecord),
+		workspaceSubs:     make(map[string]chan map[string]any),
+		archived:          make(map[string]bool),
+		hostSubs:          make(map[string]chan map[string]any),
+		pendingApprovals:  make(map[string]*pendingApproval),
+		terminals:         make(map[string]map[string]*terminalRecord),
+		closedTerminalIDs: make(map[string]bool),
+		goalActivation:    make(map[string]bool),
+		controlSubs:       make(map[string]chan map[string]any),
 	}
 
 	// Restore known sessions from SQLite
@@ -449,6 +469,7 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 						"sessionListMetadata": map[string]any{
 							"blank": len(rec.Events) == 0,
 						},
+						"goal": goalProjection(rec),
 					},
 				},
 			})
@@ -521,6 +542,7 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 				"sessionListMetadata": map[string]any{
 					"blank": isBlank,
 				},
+				"goal": goalProjection(rec),
 			},
 		}, nil
 
@@ -539,18 +561,32 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 			rec = s.getOrCreateSession(sIDStr, "")
 		}
 
-		// Extract prompt text
+		// Extract prompt text and resolve staged files into app-owned workspace
+		// references that the model and native tools can use.
 		var promptText string
+		var attached []string
 		if contentList, ok := reqMap["content"].([]any); ok {
 			for _, item := range contentList {
 				if imap, ok := item.(map[string]any); ok {
-					if imap["type"] == "text" {
+					switch imap["type"] {
+					case "text":
 						if t, ok := imap["text"].(string); ok {
 							promptText += t
+						}
+					case "file":
+						receiptID, _ := imap["receiptId"].(string)
+						if upload := s.uploads.get(receiptID); upload != nil && upload.SessionID == sIDStr {
+							attached = append(attached, fmt.Sprintf("[Attached file: %s at %s]", upload.Name, upload.RelativePath))
 						}
 					}
 				}
 			}
+		}
+		if len(attached) > 0 {
+			if promptText != "" {
+				promptText += "\n\n"
+			}
+			promptText += strings.Join(attached, "\n")
 		}
 
 		if strings.TrimSpace(promptText) == "" {
@@ -631,6 +667,9 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		}
 		return map[string]any{"title": title}, nil
 
+	case "session/fork":
+		return s.forkSession(ctx, args)
+
 	case "session/selectModel":
 		reqMap, _ := args["request"].(map[string]any)
 		sIDStr, _ := reqMap["sessionId"].(string)
@@ -688,8 +727,39 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		}
 
 		rec.mu.Lock()
-		records := make([]map[string]any, len(rec.Events))
-		for i, ev := range rec.Events {
+		throughSeq := numberArg(reqMap, "throughSeq", len(rec.Events))
+		if throughSeq <= 0 || throughSeq > len(rec.Events) {
+			throughSeq = len(rec.Events)
+		}
+		maxSeq := throughSeq
+		if beforeSeq := numberArg(reqMap, "beforeSeq", 0); beforeSeq > 0 && beforeSeq-1 < maxSeq {
+			maxSeq = beforeSeq - 1
+		}
+		eligible := make([]map[string]any, 0, maxSeq)
+		for _, ev := range rec.Events {
+			seq, _ := ev["seq"].(int)
+			if seq <= 0 || seq > maxSeq {
+				continue
+			}
+			eligible = append(eligible, ev)
+		}
+		maxMessages := numberArg(reqMap, "maxMessages", 100)
+		start := 0
+		if maxMessages > 0 {
+			messages := 0
+			for i := len(eligible) - 1; i >= 0; i-- {
+				if eventType, _ := eligible[i]["type"].(string); eventType == "user/message" || eventType == "assistant/message" {
+					messages++
+					if messages > maxMessages {
+						start = i + 1
+						break
+					}
+				}
+			}
+		}
+		selected := eligible[start:]
+		records := make([]map[string]any, len(selected))
+		for i, ev := range selected {
 			records[i] = map[string]any{
 				"seq":   ev["seq"],
 				"event": ev,
@@ -699,7 +769,7 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 
 		return map[string]any{
 			"records": records,
-			"hasMore": false,
+			"hasMore": start > 0 || (len(selected) > 0 && selected[0]["seq"] != 1),
 		}, nil
 
 	case "session/modelCatalog":
@@ -835,6 +905,18 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 	case "workspaceFiles/list", "workspaceFiles/stat", "workspaceFiles/read", "workspaceFiles/readBytes":
 		return s.dispatchWorkspaceRPC(endpoint, args)
 
+	case "fileUploads/upload":
+		return s.dispatchInlineUpload(args)
+
+	case "session/attachment":
+		return s.dispatchAttachment(args)
+
+	case "terminal/environment", "terminal/shells", "terminal/list", "terminal/create", "terminal/rename", "terminal/close", "terminal/write", "terminal/resize":
+		return s.dispatchTerminalRPC(ctx, endpoint, args)
+
+	case "goals/get", "goals/create", "goals/edit", "goals/pause", "goals/resume", "goals/complete", "goals/clear":
+		return s.dispatchGoalRPC(endpoint, args)
+
 	case "session/search":
 		query, _ := args["query"].(string)
 		if query == "" {
@@ -894,6 +976,7 @@ func (s *Server) close() {
 	for _, pending := range approvals {
 		pending.once.Do(func() { pending.result <- false })
 	}
+	s.closeAllTerminals()
 }
 
 // Broadcast an event to all subscribers of a session and persist it.
@@ -1248,6 +1331,9 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 	workspaceSubscriptions := make(map[string]workspaceSubscription)
 	hostSubscriptions := make(map[string]string)
 	watchCancellations := make(map[string]context.CancelFunc)
+	terminalAttachments := make(map[string]terminalAttachment)
+	terminalRetains := make(map[string]context.CancelFunc)
+	controlSubscriptions := make(map[string]string)
 	removeSubscription := func(streamID string) {
 		if sub, ok := subscriptions[streamID]; ok {
 			delete(subscriptions, streamID)
@@ -1271,6 +1357,18 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 			delete(watchCancellations, streamID)
 			cancel()
 		}
+		if attachment, ok := terminalAttachments[streamID]; ok {
+			delete(terminalAttachments, streamID)
+			attachment.record.detach(attachment.key)
+		}
+		if cancel, ok := terminalRetains[streamID]; ok {
+			delete(terminalRetains, streamID)
+			cancel()
+		}
+		if key, ok := controlSubscriptions[streamID]; ok {
+			delete(controlSubscriptions, streamID)
+			s.removeControlSubscriber(key)
+		}
 	}
 	defer func() {
 		for streamID := range subscriptions {
@@ -1283,6 +1381,15 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 			removeSubscription(streamID)
 		}
 		for streamID := range watchCancellations {
+			removeSubscription(streamID)
+		}
+		for streamID := range terminalAttachments {
+			removeSubscription(streamID)
+		}
+		for streamID := range terminalRetains {
+			removeSubscription(streamID)
+		}
+		for streamID := range controlSubscriptions {
 			removeSubscription(streamID)
 		}
 	}()
@@ -1434,6 +1541,7 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 								"sessionListMetadata": map[string]any{
 									"blank": isBlank,
 								},
+								"goal": goalProjection(rec),
 							},
 						},
 					},
@@ -1480,6 +1588,20 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 				}(streamId, ch)
+			} else if endpoint == "session/control" {
+				removeSubscription(streamId)
+				key, updates := s.addControlSubscriber()
+				controlSubscriptions[streamId] = key
+				_ = safeWrite(map[string]any{
+					"type": "item", "streamId": streamId, "value": s.sessionControlBaseline(),
+				})
+				go func(stream string, channel chan map[string]any) {
+					for update := range channel {
+						if err := safeWrite(map[string]any{"type": "item", "streamId": stream, "value": update}); err != nil {
+							return
+						}
+					}
+				}(streamId, updates)
 			} else if endpoint == "workspaceFiles/changes" {
 				removeSubscription(streamId)
 				args, _ := payload["args"].(map[string]any)
@@ -1501,12 +1623,102 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 						})
 					}
 				}(streamId, sessionID, path)
+			} else if endpoint == "terminal/attach" || endpoint == "terminal/follow" {
+				removeSubscription(streamId)
+				args, _ := payload["args"].(map[string]any)
+				if args == nil {
+					args = payload
+				}
+				sessionID, _ := args["agentId"].(string)
+				id, _ := args["id"].(string)
+				terminal := s.terminal(sessionID, id)
+				if terminal == nil {
+					_ = safeWrite(map[string]any{
+						"type": "error", "streamId": streamId,
+						"error": map[string]any{"code": "terminal/unavailable", "message": "terminal not found"},
+					})
+					continue
+				}
+				attachmentKey, _ := args["attachmentId"].(string)
+				if attachmentKey == "" {
+					attachmentKey = newTerminalAttachmentID()
+				}
+				attachment := terminal.attach(attachmentKey)
+				terminalAttachments[streamId] = attachment
+				follow := endpoint == "terminal/follow"
+				go func(stream string, attached terminalAttachment, stampController bool) {
+					for value := range attached.ch {
+						if value["type"] == "__end" {
+							_ = safeWrite(map[string]any{"type": "end", "streamId": stream})
+							return
+						}
+						if stampController {
+							value = terminalFrameWithController(value, attached.key)
+						}
+						if err := safeWrite(map[string]any{"type": "item", "streamId": stream, "value": value}); err != nil {
+							return
+						}
+					}
+				}(streamId, attachment, follow)
+			} else if endpoint == "terminal/retain" {
+				removeSubscription(streamId)
+				args, _ := payload["args"].(map[string]any)
+				if args == nil {
+					args = payload
+				}
+				sessionID, _ := args["sessionId"].(string)
+				id, _ := args["id"].(string)
+				terminal := s.terminal(sessionID, id)
+				if terminal == nil {
+					_ = safeWrite(map[string]any{
+						"type": "error", "streamId": streamId,
+						"error": map[string]any{"code": "terminal/unavailable", "message": "terminal not found"},
+					})
+					continue
+				}
+				retainCtx, cancel := context.WithCancel(r.Context())
+				terminalRetains[streamId] = cancel
+				_ = safeWrite(map[string]any{"type": "item", "streamId": streamId, "value": map[string]any{"type": "retained"}})
+				go func(stream string, target *terminalRecord) {
+					select {
+					case <-target.done:
+						_ = safeWrite(map[string]any{"type": "end", "streamId": stream})
+					case <-retainCtx.Done():
+					}
+				}(streamId, terminal)
 			} else {
 				_ = safeWrite(map[string]any{
 					"type": "error", "streamId": streamId,
 					"error": map[string]any{"code": "gateway/method-not-found", "message": "native engine does not implement " + endpoint},
 				})
 			}
+
+		case "item":
+			attachment, ok := terminalAttachments[streamId]
+			if !ok {
+				continue
+			}
+			value, _ := frame["value"].(map[string]any)
+			sequence := numberArg(value, "sequence", 0)
+			var commandErr error
+			switch value["type"] {
+			case "write":
+				data, _ := value["data"].(string)
+				commandErr = attachment.record.writeFrom(attachment.key, data)
+			case "resize":
+				commandErr = attachment.record.resizeFrom(attachment.key, numberArg(value, "cols", 80), numberArg(value, "rows", 24))
+			default:
+				commandErr = fmt.Errorf("unknown terminal input command")
+			}
+			ack := map[string]any{"type": "ack", "sequence": sequence}
+			if commandErr != nil {
+				if strings.Contains(commandErr.Error(), "read-only") {
+					ack["refusal"] = "read-only"
+				} else {
+					ack["refusal"] = "not-running"
+				}
+			}
+			_ = safeWrite(map[string]any{"type": "item", "streamId": streamId, "value": ack})
 
 		case "cancel", "end":
 			removeSubscription(streamId)
@@ -1560,6 +1772,7 @@ func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
 		delete(s.sessions, sIDStr)
 	}
 	s.sessionsMu.Unlock()
+	s.closeSessionTerminals(sIDStr)
 
 	_ = s.dbStore.Delete(r.Context(), brand.NewSessionID(sIDStr))
 
@@ -1620,6 +1833,7 @@ func main() {
 	mux.HandleFunc("/", server.handleRoot)
 	mux.HandleFunc("/api/remote.mux", server.handleMux)
 	mux.HandleFunc("/api/file", server.handleFile)
+	mux.HandleFunc("/api/session/uploadFileBinary", server.handleUploadBinary)
 	mux.HandleFunc("/api/", server.handleRPC)
 	mux.HandleFunc("/dsh-go/v1/info", server.handleBuildInfo)
 	mux.HandleFunc("/dsh-go/v1/sessions/deletion", server.handleSessionDeletionCapability)

@@ -471,6 +471,7 @@ type GoalBlockReason struct {
 }
 
 type GoalChangeData struct {
+	Operation   string    `json:"operation,omitempty"`
 	GoalID      string    `json:"goalId"`
 	Phase       GoalPhase `json:"phase"`
 	Description string    `json:"description,omitempty"`

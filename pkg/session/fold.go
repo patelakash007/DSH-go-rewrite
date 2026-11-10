@@ -208,7 +208,12 @@ func foldGoalChange(events []SessionEvent) GoalFold {
 			continue
 		}
 		if d, ok := ev.Data.(GoalChangeData); ok {
-
+			if d.Operation == "clear" {
+				if !out.Present || d.Revision > out.Revision {
+					out = GoalFold{Present: false, GoalID: d.GoalID, Revision: d.Revision}
+				}
+				continue
+			}
 			if !out.Present || d.Revision > out.Revision {
 				out = GoalFold{
 					Present:     true,
