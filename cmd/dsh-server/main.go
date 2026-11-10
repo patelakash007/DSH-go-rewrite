@@ -119,9 +119,11 @@ type Server struct {
 	pinnedSessions     []string
 	workspaceStatePath string
 
-	hostMu           sync.Mutex
-	hostSubs         map[string]chan map[string]any
-	pendingApprovals map[string]*pendingApproval
+	hostMu             sync.Mutex
+	hostSubs           map[string]chan map[string]any
+	pendingApprovals   map[string]*pendingApproval
+	pendingQuestions   map[string]*pendingQuestion
+	continuedQuestions map[string]*pendingQuestion
 
 	terminalMu        sync.Mutex
 	terminals         map[string]map[string]*terminalRecord
@@ -208,6 +210,8 @@ func newServerWithWorkspace(port int, homeDir, workspaceDir string) (*Server, er
 		workspaceStatePath: filepath.Join(homeDir, "workspace-state.json"),
 		hostSubs:           make(map[string]chan map[string]any),
 		pendingApprovals:   make(map[string]*pendingApproval),
+		pendingQuestions:   make(map[string]*pendingQuestion),
+		continuedQuestions: make(map[string]*pendingQuestion),
 		terminals:          make(map[string]map[string]*terminalRecord),
 		closedTerminalIDs:  make(map[string]bool),
 		goalActivation:     make(map[string]bool),
@@ -1111,6 +1115,9 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 	case "subagents/prompt", "subagents/interruptByParent":
 		return s.dispatchSubagentRPC(endpoint, args)
 
+	case "userQuestions/answer":
+		return s.dispatchUserQuestionRPC(endpoint, args)
+
 	case "dynamicCordisRunner/inventory":
 		return []any{}, nil
 
@@ -1831,6 +1838,17 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 				request, _ := args["request"].(map[string]any)
 				sessionID, _ := request["sessionId"].(string)
 				go s.openJobList(sessionID, func(value map[string]any) error {
+					return safeWrite(map[string]any{"type": "item", "streamId": streamId, "value": value})
+				})
+			} else if endpoint == "userQuestions/attachWait" {
+				removeSubscription(streamId)
+				args, _ := payload["args"].(map[string]any)
+				if args == nil {
+					args = payload
+				}
+				sessionID, _ := args["agentId"].(string)
+				callID, _ := args["callId"].(string)
+				go s.openQuestionWait(sessionID, callID, func(value map[string]any) error {
 					return safeWrite(map[string]any{"type": "item", "streamId": streamId, "value": value})
 				})
 			} else if endpoint == "job/follow" {

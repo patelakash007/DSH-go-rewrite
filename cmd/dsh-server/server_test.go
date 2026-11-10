@@ -762,6 +762,94 @@ func (a *blockingAdapter) Chat(ctx context.Context, _ llm.ChatRequest, callback 
 	return llm.Usage{PromptTokens: 1, CompletionTokens: 1}, nil
 }
 
+func TestNativeUserQuestions(t *testing.T) {
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	server.adapter = &recordingAdapter{requests: make(chan llm.ChatRequest, 16)}
+	rec := server.getOrCreateSession("question-session", "")
+	key, channel, _ := server.addHostSubscriber()
+	defer server.removeHostSubscriber(key)
+
+	type questionResult struct {
+		value any
+		err   error
+	}
+	done := make(chan questionResult, 1)
+	go func() {
+		value, err := server.askUserQuestion(context.Background(), rec.ID.Raw(), map[string]any{
+			"questions": []any{map[string]any{
+				"id": "q1", "question": "Which native path?",
+				"options": []any{map[string]any{"label": "Go"}, map[string]any{"label": "Flutter"}},
+			}},
+		})
+		done <- questionResult{value, err}
+	}()
+
+	var frame map[string]any
+	deadline := time.Now().Add(5 * time.Second)
+	for frame == nil && time.Now().Before(deadline) {
+		select {
+		case candidate := <-channel:
+			if candidate["event"] == "user-questions/request" {
+				frame = candidate
+			}
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	if frame == nil {
+		t.Fatal("question frame was not emitted")
+	}
+	request, _ := frame["request"].(map[string]any)
+	wait, _ := request["wait"].(map[string]any)
+	if wait["callId"] == "" || wait["timed"] != false {
+		t.Fatalf("question wait = %#v", wait)
+	}
+	server.resolveHostEvent(frame["eventId"].(string), map[string]any{
+		"kind": "result",
+		"value": map[string]any{"answers": []any{
+			map[string]any{"id": "q1", "selected": []any{"Go"}},
+		}},
+	})
+	select {
+	case result := <-done:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		value := result.value.(map[string]any)
+		if value["status"] != "answered" {
+			t.Fatalf("question result = %#v", value)
+		}
+		answers, _ := value["answers"].([]any)
+		if len(answers) != 1 {
+			t.Fatalf("question answers = %#v", answers)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("question did not resolve")
+	}
+
+	continued := &pendingQuestion{
+		id: "continued-question", sessionID: rec.ID.Raw(), callID: "continued-call",
+		createdAt: time.Now(), result: make(chan map[string]any, 1),
+	}
+	server.hostMu.Lock()
+	server.continuedQuestions[rec.ID.Raw()+"\x00continued-call"] = continued
+	server.hostMu.Unlock()
+	answered, rpcErr := server.dispatchRPC(context.Background(), "userQuestions/answer", map[string]any{
+		"agentId": rec.ID.Raw(), "callId": "continued-call",
+		"answer": map[string]any{"answers": []any{
+			map[string]any{"id": "q1", "selected": []any{"Go"}},
+		}},
+	})
+	if rpcErr != nil || answered != true {
+		t.Fatalf("continued answer = %#v, %+v", answered, rpcErr)
+	}
+	if answered, rpcErr := server.dispatchRPC(context.Background(), "userQuestions/answer", map[string]any{
+		"agentId": rec.ID.Raw(), "callId": "missing-call",
+	}); rpcErr != nil || answered != false {
+		t.Fatalf("missing continued answer = %#v, %+v", answered, rpcErr)
+	}
+}
+
 func TestNativeSubagentLifecycle(t *testing.T) {
 	server, _, cleanup := setupTestServer(t)
 	defer cleanup()

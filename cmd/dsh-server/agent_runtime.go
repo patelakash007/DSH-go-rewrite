@@ -155,7 +155,12 @@ func (s *Server) ensureAgent(rec *SessionRecord) *agent.Agent {
 		Provider: provider, Model: rec.Model, DefaultTimeout: 15 * time.Minute,
 	})
 	definitions := rec.Tools.Tools()
-	definitions = append(definitions, nativeSkillTool(rec.Skills), s.scheduleCreateTool(rec.ID.Raw()), s.spawnSubagentTool(rec.ID.Raw()))
+	definitions = append(definitions,
+		nativeSkillTool(rec.Skills),
+		s.scheduleCreateTool(rec.ID.Raw()),
+		s.spawnSubagentTool(rec.ID.Raw()),
+		s.askUserQuestionTool(rec.ID.Raw()),
+	)
 	rec.Agent.SetTools(definitions...)
 	rec.Agent.SetToolProvider(func(name string) *tools.Tool {
 		switch name {
@@ -165,6 +170,8 @@ func (s *Server) ensureAgent(rec *SessionRecord) *agent.Agent {
 			return s.scheduleCreateTool(rec.ID.Raw())
 		case "spawn_subagent":
 			return s.spawnSubagentTool(rec.ID.Raw())
+		case "ask_user_question":
+			return s.askUserQuestionTool(rec.ID.Raw())
 		default:
 			return rec.Tools.Lookup(name)
 		}
@@ -483,6 +490,9 @@ func (s *Server) removePendingApproval(eventID string, expected *pendingApproval
 }
 
 func (s *Server) resolveHostEvent(eventID string, outcome map[string]any) {
+	if s.resolveQuestion(eventID, outcome) {
+		return
+	}
 	s.hostMu.Lock()
 	pending := s.pendingApprovals[eventID]
 	if pending == nil {
