@@ -278,6 +278,8 @@ func NewProviderFailure(detail string) *LlmFailure {
 // ============================================================================
 
 type ChatRequest struct {
+	Provider string `json:"provider,omitempty"`
+
 	Model string `json:"model"`
 
 	Messages []Message `json:"messages"`

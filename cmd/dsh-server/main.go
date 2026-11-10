@@ -48,6 +48,7 @@ type SessionRecord struct {
 	Title       string
 	Cwd         string
 	Model       string
+	Provider    string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	Log         *session.SessionLog
@@ -89,6 +90,7 @@ type Server struct {
 	dbStore      *sqlite.Store
 	credStore    *credentials.Store
 	adapter      llm.LLMAdapter
+	router       *providerRouter
 	workspaceDir string
 	files        *nativefs.Service
 	uploads      *uploadStore
@@ -221,6 +223,7 @@ func newServerWithWorkspace(port int, homeDir, workspaceDir string) (*Server, er
 		return nil, fmt.Errorf("load native schedules: %w", err)
 	}
 	s.schedules = schedules
+	s.router = &providerRouter{server: s}
 	defaultPermission, _ := settings.getString("native-engine", "defaultPermission")
 
 	// Restore known sessions from SQLite
@@ -489,6 +492,10 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 			if modelName == "" {
 				modelName = "deepseek-chat"
 			}
+			providerName := rec.Provider
+			if providerName == "" {
+				providerName = "deepseek"
+			}
 			items = append(items, map[string]any{
 				"sessionId":      rec.ID.Raw(),
 				"updatedAt":      rec.UpdatedAt.UnixMilli(),
@@ -505,11 +512,11 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 						},
 						"modelSelection": map[string]any{
 							"lastUsed": map[string]any{
-								"provider": "deepseek",
+								"provider": providerName,
 								"model":    modelName,
 							},
 							"next": map[string]any{
-								"provider": "deepseek",
+								"provider": providerName,
 								"model":    modelName,
 							},
 						},
@@ -590,6 +597,10 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		if modelName == "" {
 			modelName = "deepseek-chat"
 		}
+		providerName := rec.Provider
+		if providerName == "" {
+			providerName = "deepseek"
+		}
 		inbox := inboxProjectionLocked(rec)
 		rec.mu.Unlock()
 
@@ -603,11 +614,11 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 				},
 				"modelSelection": map[string]any{
 					"lastUsed": map[string]any{
-						"provider": "deepseek",
+						"provider": providerName,
 						"model":    modelName,
 					},
 					"next": map[string]any{
-						"provider": "deepseek",
+						"provider": providerName,
 						"model":    modelName,
 					},
 				},
@@ -770,8 +781,15 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		s.sessionsMu.RUnlock()
 
 		if ok {
+			if provider == "" {
+				provider = "deepseek"
+			}
+			if provider != "deepseek" && s.settings.providerProfile(provider) == nil {
+				return nil, &RPCError{Code: "session/model-unavailable", Message: "provider is not configured"}
+			}
 			rec.mu.Lock()
 			rec.Model = model
+			rec.Provider = provider
 			runtimeAgent := rec.Agent
 			rec.mu.Unlock()
 			if runtimeAgent != nil {
@@ -861,39 +879,7 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 		}, nil
 
 	case "session/modelCatalog":
-		return map[string]any{
-			"default": map[string]any{
-				"provider": "deepseek",
-				"model":    "deepseek-chat",
-			},
-			"routableProviders": []string{"deepseek"},
-			"groups": []map[string]any{
-				{
-					"id":   "deepseek",
-					"name": "DeepSeek",
-					"models": []map[string]any{
-						{
-							"id":          "deepseek-chat",
-							"name":        "DeepSeek-V3",
-							"description": "DeepSeek-V3 high-performance flagship model",
-						},
-						{
-							"id":          "deepseek-reasoner",
-							"name":        "DeepSeek-R1",
-							"description": "DeepSeek-R1 deep reasoning model",
-							"reasoning": map[string]any{
-								"efforts": []map[string]any{
-									{"id": "low", "name": "Low", "description": "Fast thinking"},
-									{"id": "high", "name": "High", "description": "Deep reasoning"},
-								},
-								"defaultEffort": "high",
-							},
-						},
-					},
-				},
-			},
-			"failures": []map[string]any{},
-		}, nil
+		return s.providerCatalog(), nil
 
 	case "credentials/describe":
 		refs, _ := args["refs"].([]any)
@@ -953,7 +939,10 @@ func (s *Server) dispatchRPC(ctx context.Context, endpoint string, args map[stri
 	case "llm/listProviders":
 		return []map[string]any{{"id": "deepseek", "name": "DeepSeek"}}, nil
 
-	case "llm/listConfigurableProviders", "pluginManager/listBundles", "pluginManager/listPlugins":
+	case "llm/listConfigurableProviders", "llm/discoverModels":
+		return s.dispatchProviderRPC(endpoint, args)
+
+	case "pluginManager/listBundles", "pluginManager/listPlugins":
 		return []any{}, nil
 
 	case "commands/list":
@@ -1642,6 +1631,10 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 				if modelName == "" {
 					modelName = "deepseek-chat"
 				}
+				providerName := rec.Provider
+				if providerName == "" {
+					providerName = "deepseek"
+				}
 
 				// Register sub
 				ch := make(chan []byte, 100)
@@ -1675,11 +1668,11 @@ func (s *Server) handleMux(w http.ResponseWriter, r *http.Request) {
 								},
 								"modelSelection": map[string]any{
 									"lastUsed": map[string]any{
-										"provider": "deepseek",
+										"provider": providerName,
 										"model":    modelName,
 									},
 									"next": map[string]any{
-										"provider": "deepseek",
+										"provider": providerName,
 										"model":    modelName,
 									},
 								},

@@ -17,6 +17,10 @@ func (s *Server) sessionProjection(rec *SessionRecord) map[string]any {
 	if model == "" {
 		model = "deepseek-chat"
 	}
+	provider := rec.Provider
+	if provider == "" {
+		provider = "deepseek"
+	}
 	permission := rec.Permission
 	if permission == "" {
 		permission = "auto"
@@ -29,8 +33,8 @@ func (s *Server) sessionProjection(rec *SessionRecord) map[string]any {
 		"title":       title,
 		"permissions": map[string]any{"currentValue": permission},
 		"modelSelection": map[string]any{
-			"lastUsed": map[string]any{"provider": "deepseek", "model": model},
-			"next":     map[string]any{"provider": "deepseek", "model": model},
+			"lastUsed": map[string]any{"provider": provider, "model": model},
+			"next":     map[string]any{"provider": provider, "model": model},
 		},
 		"sessionListMetadata": map[string]any{"blank": blank},
 		"goal":                goalProjection(rec),

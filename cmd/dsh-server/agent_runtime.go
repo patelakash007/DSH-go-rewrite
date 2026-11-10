@@ -41,19 +41,20 @@ func (a nativeAdapter) Name() string {
 }
 
 func (a nativeAdapter) Chat(ctx context.Context, request llm.ChatRequest, callback func(llm.StreamChunk)) (llm.Usage, error) {
-	adapter := a.server.adapter
-	if adapter == nil {
-		return llm.Usage{}, fmt.Errorf("native engine has no model adapter")
+	if a.server.router == nil {
+		return llm.Usage{}, fmt.Errorf("native engine has no model router")
 	}
-	if _, deepSeek := adapter.(*provider_deepseek.DeepSeek); deepSeek {
-		key, configured := a.server.credStore.Resolve(ctx, brand.NewCredentialRef("DEEPSEEK_API_KEY"))
-		if !configured || strings.TrimSpace(key) == "" {
-			callback(llm.StreamChunk{Kind: llm.ChunkText, Text: "Welcome to DSH Native! Configure DEEPSEEK_API_KEY in Settings to chat with DeepSeek."})
-			callback(llm.StreamChunk{Kind: llm.ChunkDone})
-			return llm.Usage{}, nil
+	if request.Provider == "" || request.Provider == "deepseek" {
+		if _, deepSeek := a.server.adapter.(*provider_deepseek.DeepSeek); deepSeek {
+			key, configured := a.server.credStore.Resolve(ctx, brand.NewCredentialRef("DEEPSEEK_API_KEY"))
+			if !configured || strings.TrimSpace(key) == "" {
+				callback(llm.StreamChunk{Kind: llm.ChunkText, Text: "Welcome to DSH Native! Configure DEEPSEEK_API_KEY in Settings to chat with DeepSeek."})
+				callback(llm.StreamChunk{Kind: llm.ChunkDone})
+				return llm.Usage{}, nil
+			}
 		}
 	}
-	return adapter.Chat(ctx, request, callback)
+	return a.server.router.Chat(ctx, request, callback)
 }
 
 func (s *Server) attachSession(rec *SessionRecord) {
@@ -83,7 +84,11 @@ func (s *Server) ensureAgent(rec *SessionRecord) *agent.Agent {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	if rec.Agent != nil {
-		rec.Agent.SetModel("deepseek", rec.Model, "")
+		provider := rec.Provider
+		if provider == "" {
+			provider = "deepseek"
+		}
+		rec.Agent.SetModel(provider, rec.Model, "")
 		return rec.Agent
 	}
 	rec.Tools = nativetools.New(s.files, func() string {
@@ -142,8 +147,12 @@ func (s *Server) ensureAgent(rec *SessionRecord) *agent.Agent {
 	if catalog := rec.Skills.CatalogText(); catalog != "" {
 		system.Register("skills", 90, catalog)
 	}
+	provider := rec.Provider
+	if provider == "" {
+		provider = "deepseek"
+	}
 	rec.Agent = agent.NewAgent(rec.ID, rec.Log, system, pipeline, nativeAdapter{server: s}, agent.AgentOptions{
-		Provider: "deepseek", Model: rec.Model, DefaultTimeout: 15 * time.Minute,
+		Provider: provider, Model: rec.Model, DefaultTimeout: 15 * time.Minute,
 	})
 	definitions := rec.Tools.Tools()
 	definitions = append(definitions, nativeSkillTool(rec.Skills), s.scheduleCreateTool(rec.ID.Raw()))

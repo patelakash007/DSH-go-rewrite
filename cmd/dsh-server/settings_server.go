@@ -45,6 +45,9 @@ func (s *nativeSettings) ensureDefaultsLocked() {
 	if s.namespaces["native-engine"] == nil {
 		s.namespaces["native-engine"] = &settingNamespace{Value: map[string]any{"defaultPermission": "auto"}}
 	}
+	if s.namespaces[piAiSettingsNamespace] == nil {
+		s.namespaces[piAiSettingsNamespace] = &settingNamespace{Value: map[string]any{"providers": map[string]any{}}}
+	}
 	for _, namespace := range s.namespaces {
 		if namespace.Value == nil {
 			namespace.Value = map[string]any{}
@@ -217,6 +220,8 @@ func nativeSettingSchema(namespace string) map[string]any {
 		fields["defaultPermission"] = map[string]any{
 			"type": "string", "meta": map[string]any{"description": "Default native tool permission preset", "required": true},
 		}
+	case piAiSettingsNamespace:
+		return providerSettingsSchema()
 	}
 	return map[string]any{"type": "object", "dict": fields, "meta": map[string]any{}}
 }
@@ -232,6 +237,8 @@ func validateNativeSettings(namespace string, value map[string]any) error {
 		if permission != "read-only" && permission != "auto" && permission != "danger-full-access" {
 			return fmt.Errorf("invalid native permission preset")
 		}
+	case piAiSettingsNamespace:
+		return validateProviderSettings(value)
 	default:
 		return fmt.Errorf("settings namespace %q not found", namespace)
 	}

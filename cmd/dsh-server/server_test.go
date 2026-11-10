@@ -703,7 +703,7 @@ func TestNativeSettingsAndCommandCatalogue(t *testing.T) {
 	server, _, cleanup := setupTestServer(t)
 	defer cleanup()
 	description, rpcErr := server.dispatchRPC(context.Background(), "settings/describe", map[string]any{})
-	if rpcErr != nil || len(description.(map[string]any)["namespaces"].([]map[string]any)) != 2 {
+	if rpcErr != nil || len(description.(map[string]any)["namespaces"].([]map[string]any)) != 3 {
 		t.Fatalf("settings description = %#v, %+v", description, rpcErr)
 	}
 	updated, rpcErr := server.dispatchRPC(context.Background(), "settings/mutate", map[string]any{
@@ -756,6 +756,86 @@ func (a *blockingAdapter) Chat(ctx context.Context, _ llm.ChatRequest, callback 
 	}
 	callback(llm.StreamChunk{Kind: llm.ChunkText, Text: "reply"})
 	return llm.Usage{PromptTokens: 1, CompletionTokens: 1}, nil
+}
+
+func TestNativeCustomProviderRoutingAndDiscovery(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"id":"native-model","name":"Native Model","context_window":32000}]}`))
+		case "/v1/chat/completions":
+			if r.Header.Get("Authorization") != "Bearer custom-key" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"custom reply\"}}]}\n\n"))
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	server, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	if err := server.credStore.Set(context.Background(), brand.NewCredentialRef("CUSTOM_NATIVE_API_KEY"), "custom-key"); err != nil {
+		t.Fatal(err)
+	}
+	profile := map[string]any{
+		"displayName": "Native Gateway", "api": "openai-completions",
+		"baseURL": upstream.URL + "/v1", "apiKeyEnv": "CUSTOM_NATIVE_API_KEY",
+		"models": []any{map[string]any{"id": "native-model", "name": "Native Model"}},
+	}
+	updated, rpcErr := server.dispatchRPC(context.Background(), "settings/mutate", map[string]any{
+		"ns": "llm-pi-ai", "expectedRevision": 0,
+		"ops": []any{map[string]any{"op": "set", "path": []any{"providers", "native-gateway"}, "value": profile}},
+	})
+	if rpcErr != nil {
+		t.Fatalf("save provider: %+v", rpcErr)
+	}
+	if updated.(map[string]any)["revision"] != 1 {
+		t.Fatalf("provider settings = %#v", updated)
+	}
+	providers, rpcErr := server.dispatchRPC(context.Background(), "llm/listConfigurableProviders", map[string]any{})
+	if rpcErr != nil || len(providers.([]map[string]any)) != 2 {
+		t.Fatalf("configurable providers = %#v, %+v", providers, rpcErr)
+	}
+	catalog, rpcErr := server.dispatchRPC(context.Background(), "session/modelCatalog", map[string]any{})
+	if rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	groups := catalog.(map[string]any)["groups"].([]map[string]any)
+	if len(groups) != 2 || groups[1]["id"] != "native-gateway" {
+		t.Fatalf("model catalog = %#v", catalog)
+	}
+	discovered, rpcErr := server.dispatchRPC(context.Background(), "llm/discoverModels", map[string]any{
+		"request": map[string]any{"baseURL": upstream.URL + "/v1", "apiKey": "custom-key", "api": "openai-completions"},
+	})
+	if rpcErr != nil || len(discovered.([]map[string]any)) != 1 || discovered.([]map[string]any)[0]["id"] != "native-model" {
+		t.Fatalf("discovered models = %#v, %+v", discovered, rpcErr)
+	}
+
+	rec := server.getOrCreateSession("custom-provider-session", "")
+	if _, rpcErr := server.dispatchRPC(context.Background(), "session/selectModel", map[string]any{
+		"request": map[string]any{"sessionId": rec.ID.Raw(), "provider": "native-gateway", "model": "native-model"},
+	}); rpcErr != nil {
+		t.Fatalf("select custom model: %+v", rpcErr)
+	}
+	usage, err := server.router.Chat(context.Background(), llm.ChatRequest{
+		Provider: "native-gateway", Model: "native-model",
+		Messages: []llm.Message{llm.NewUserMessage("hello")},
+	}, func(chunk llm.StreamChunk) {})
+	if err != nil {
+		t.Fatalf("custom provider chat: %v", err)
+	}
+	if usage.PromptTokens != 0 {
+		t.Fatalf("usage = %#v", usage)
+	}
+	if rec.Provider != "native-gateway" || rec.Model != "native-model" {
+		t.Fatalf("selected model = %s/%s", rec.Provider, rec.Model)
+	}
 }
 
 func TestNativePromptQueueAndSteering(t *testing.T) {

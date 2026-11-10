@@ -408,6 +408,7 @@ func (a *Agent) runStep(ctx context.Context, req *turnReq, turnIdx, stepSeq uint
 	var text strings.Builder
 	var reasoning strings.Builder
 	usage, err := a.adapter.Chat(ctx, llm.ChatRequest{
+		Provider:  a.providerName(),
 		Model:     a.modelName(),
 		System:    system,
 		Messages:  messages,
@@ -516,6 +517,15 @@ func (a *Agent) modelName() string {
 		return a.options.Model
 	}
 	return "deepseek-chat"
+}
+
+func (a *Agent) providerName() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.options.Provider != "" {
+		return a.options.Provider
+	}
+	return "deepseek"
 }
 
 func (a *Agent) toolSchemas() []llm.ToolSchema {
