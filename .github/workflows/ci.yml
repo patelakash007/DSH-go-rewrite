@@ -83,7 +83,8 @@ jobs:
           home="$RUNNER_TEMP/dsh-native-contract-home"
           log="$RUNNER_TEMP/dsh-native-contract.log"
           (cd dsh-go-rewrite && go build -o "$host" ./cmd/dsh-server)
-          mkdir -p "$home"
+          mkdir -p "$home/workspace"
+          printf 'first line\nhello from native workspace\n' > "$home/workspace/contract.txt"
           "$host" --port 39080 --home "$home" >"$log" 2>&1 &
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
